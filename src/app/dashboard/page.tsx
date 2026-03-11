@@ -56,7 +56,7 @@ export default function DashboardPage() {
     try {
       setInitProgress('Creating directories...')
       await new Promise(resolve => setTimeout(resolve, 500)) // Small delay for UX
-      
+
       setInitProgress('Cloning Supabase repository (this may take a few minutes)...')
       const response = await fetch('/api/projects/initialize', {
         method: 'POST',
@@ -95,21 +95,21 @@ export default function DashboardPage() {
 
   const handleManageProject = async (project: Project) => {
     setSelectedProject(project)
-    
+
     // Fetch project URLs from environment variables
     try {
       const response = await fetch(`/api/projects/${project.id}/env`)
       if (response.ok) {
         const data = await response.json()
         const envVars = data.envVars || {}
-        
+
         // Extract URLs from environment variables
         const urls: Record<string, string> = {}
         if (envVars.KONG_HTTP_PORT) {
           urls['API Gateway'] = `http://localhost:${envVars.KONG_HTTP_PORT}`
         }
         if (envVars.STUDIO_PORT) {
-          urls['Supabase Studio'] = `http://localhost:${envVars.KONG_HTTP_PORT || 8000}`
+          urls['Supabase Studio'] = `http://localhost:${envVars.STUDIO_PORT}`
         }
         if (envVars.ANALYTICS_PORT) {
           urls['Analytics (Logflare)'] = `http://localhost:${envVars.ANALYTICS_PORT}`
@@ -117,7 +117,7 @@ export default function DashboardPage() {
         if (envVars.POSTGRES_PORT) {
           urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@localhost:${envVars.POSTGRES_PORT}/postgres`
         }
-        
+
         setProjectUrls(urls)
       }
     } catch (error) {
@@ -127,7 +127,7 @@ export default function DashboardPage() {
 
   const handleDeleteProject = async () => {
     if (!selectedProject) return
-    
+
     setDeleting(true)
     try {
       const response = await fetch(`/api/projects/${selectedProject.id}`, {
@@ -159,7 +159,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchProjects()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (loading) {
@@ -175,10 +175,10 @@ export default function DashboardPage() {
       <header className="border-b">
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
-            <Image 
-              src="/logo.png" 
-              alt="SupaConsole" 
-              width={150} 
+            <Image
+              src="/logo.png"
+              alt="SupaConsole"
+              width={150}
               height={150}
               className="object-contain"
             />
@@ -208,7 +208,7 @@ export default function DashboardPage() {
                     {error}
                   </div>
                 )}
-                
+
                 {initProgress && (
                   <div className="mb-4">
                     <div className="flex items-center gap-2 text-blue-500 mb-2">
@@ -216,19 +216,19 @@ export default function DashboardPage() {
                       <span className="text-sm">{initProgress}</span>
                     </div>
                     <div className="w-full bg-gray-700 rounded-full h-2">
-                      <div className="bg-blue-500 h-2 rounded-full animate-pulse" style={{width: '45%'}}></div>
+                      <div className="bg-blue-500 h-2 rounded-full animate-pulse" style={{ width: '45%' }}></div>
                     </div>
                   </div>
                 )}
-                
-                <Button 
-                  onClick={handleInitialize} 
+
+                <Button
+                  onClick={handleInitialize}
                   disabled={initializing}
                   className="w-full"
                 >
                   {initializing ? 'Initializing...' : 'Initialize'}
                 </Button>
-                
+
                 <p className="text-xs text-muted-foreground mt-3 text-center">
                   This will clone the Supabase repository (~500MB) and set up the workspace
                 </p>
@@ -272,11 +272,10 @@ export default function DashboardPage() {
                     <CardHeader>
                       <div className="flex justify-between items-start">
                         <CardTitle className="text-lg">{project.name}</CardTitle>
-                        <div className={`px-2 py-1 rounded-full text-xs ${
-                          project.status === 'active' ? 'bg-green-100 text-green-800' :
-                          project.status === 'paused' ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-gray-100 text-gray-800'
-                        }`}>
+                        <div className={`px-2 py-1 rounded-full text-xs ${project.status === 'active' ? 'bg-green-100 text-green-800' :
+                            project.status === 'paused' ? 'bg-yellow-100 text-yellow-800' :
+                              'bg-gray-100 text-gray-800'
+                          }`}>
                           {project.status}
                         </div>
                       </div>
@@ -322,11 +321,11 @@ export default function DashboardPage() {
                   </svg>
                 </button>
               </div>
-              
+
               <div className="mb-6">
                 <h4 className="font-medium text-gray-900 dark:text-white mb-2">{selectedProject.name}</h4>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{selectedProject.description}</p>
-                
+
                 {/* Project URLs */}
                 <div className="space-y-2">
                   <h5 className="text-sm font-medium text-gray-700 dark:text-gray-300">Service URLs:</h5>
@@ -352,7 +351,7 @@ export default function DashboardPage() {
                   )}
                 </div>
               </div>
-              
+
               <div className="flex gap-3">
                 <Button
                   variant="outline"
@@ -397,7 +396,7 @@ export default function DashboardPage() {
                   <p className="text-sm text-gray-600 dark:text-gray-400">This action cannot be undone</p>
                 </div>
               </div>
-              
+
               <div className="mb-6">
                 <p className="text-gray-700 dark:text-gray-300 mb-2">
                   Are you sure you want to delete <strong>{selectedProject.name}</strong>?
@@ -411,7 +410,7 @@ export default function DashboardPage() {
                   <li>Delete the project from the database</li>
                 </ul>
               </div>
-              
+
               <div className="flex gap-3">
                 <Button
                   variant="outline"

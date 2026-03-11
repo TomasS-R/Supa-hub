@@ -13,7 +13,7 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
   const { id } = await params
   try {
     const sessionToken = request.cookies.get('session')?.value
-    
+
     if (!sessionToken) {
       return NextResponse.json(
         { error: 'Unauthorized' },
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
 
     // Convert to object format
     const envVarsObject: Record<string, string> = {}
-    envVars.forEach(envVar => {
+    envVars.forEach((envVar: { key: string; value: string }) => {
       envVarsObject[envVar.key] = envVar.value
     })
 
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
   const { id } = await params
   try {
     const sessionToken = request.cookies.get('session')?.value
-    
+
     if (!sessionToken) {
       return NextResponse.json(
         { error: 'Unauthorized' },
