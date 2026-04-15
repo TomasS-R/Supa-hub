@@ -620,3 +620,553 @@ export async function deleteProject(projectId: string) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
   }
 }
+
+export async function restoreProject(projectId: string, forceNewPorts: boolean = false, customPorts: Record<string, number> | null = null) {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+    })
+
+    if (!project) {
+      throw new Error('Project not found')
+    }
+
+    const projectDir = path.join(process.cwd(), 'supabase-projects', project.slug, 'docker')
+    const coreDockerDir = path.join(process.cwd(), 'supabase-core', 'docker')
+
+    // Verify Docker is running
+    const dockerCheck = await checkDockerPrerequisites()
+    if (!dockerCheck.docker || !dockerCheck.dockerCompose) {
+      throw new Error('Docker is not running. Please start Docker Desktop and try again.')
+    }
+
+    console.log(`Restoring project ${project.name}...`)
+
+    // Step 1: Aggressively stop and remove all containers and networks
+    console.log('Stopping and removing existing containers...')
+    try {
+      await execAsync('docker compose down --remove-orphans --volumes --rmi local', { 
+        cwd: projectDir, 
+        timeout: 180000 
+      })
+      console.log('Existing containers removed')
+    } catch (downError) {
+      console.log('Trying alternative cleanup...')
+      try {
+        await execAsync('docker stop $(docker ps -q --filter "name=' + project.slug + '")', { 
+          timeout: 60000 
+        })
+        await execAsync('docker rm $(docker ps -aq --filter "name=' + project.slug + '")', { 
+          timeout: 60000 
+        })
+      } catch {
+        console.log('No containers to stop')
+      }
+    }
+
+    // Wait for ports to be released
+    console.log('Waiting for ports to be released...')
+    await new Promise(resolve => setTimeout(resolve, 5000))
+
+    // Step 2: Get environment variables from database
+    const envVars = await prisma.projectEnvVar.findMany({
+      where: { projectId },
+    })
+    const envVarsMap: Record<string, string> = {}
+    envVars.forEach(ev => {
+      envVarsMap[ev.key] = ev.value
+    })
+
+    // Step 3: Determine port configuration
+    let portsChanged = false
+    if (customPorts) {
+      // Only update PostgreSQL and Pooler ports, keep others from database
+      console.log('Using custom ports:', customPorts)
+      
+      envVarsMap['POSTGRES_PORT'] = customPorts.POSTGRES_PORT.toString()
+      envVarsMap['POOLER_PROXY_PORT_TRANSACTION'] = customPorts.POOLER_PROXY_PORT_TRANSACTION.toString()
+      portsChanged = true
+    } else if (forceNewPorts) {
+      // Find new available ports
+      console.log('Finding new available ports...')
+      const reservedPorts = await getUsedPortsFromDatabase()
+      
+      const availablePorts = await findAvailablePorts([
+        { name: 'KONG_HTTP_PORT', startPort: 20000 },
+        { name: 'KONG_HTTPS_PORT', startPort: 20001 },
+        { name: 'STUDIO_PORT', startPort: 20002 },
+        { name: 'ANALYTICS_PORT', startPort: 20003 },
+        { name: 'POSTGRES_PORT', startPort: 60000 },
+        { name: 'POOLER_PROXY_PORT_TRANSACTION', startPort: 60001 },
+      ], reservedPorts)
+
+      envVarsMap['KONG_HTTP_PORT'] = availablePorts.KONG_HTTP_PORT.toString()
+      envVarsMap['KONG_HTTPS_PORT'] = availablePorts.KONG_HTTPS_PORT.toString()
+      envVarsMap['STUDIO_PORT'] = availablePorts.STUDIO_PORT.toString()
+      envVarsMap['ANALYTICS_PORT'] = availablePorts.ANALYTICS_PORT.toString()
+      envVarsMap['POSTGRES_PORT'] = availablePorts.POSTGRES_PORT.toString()
+      envVarsMap['POOLER_PROXY_PORT_TRANSACTION'] = availablePorts.POOLER_PROXY_PORT_TRANSACTION.toString()
+      envVarsMap['SUPABASE_PUBLIC_URL'] = `http://localhost:${availablePorts.KONG_HTTP_PORT}`
+      envVarsMap['API_EXTERNAL_URL'] = `http://localhost:${availablePorts.KONG_HTTP_PORT}`
+      envVarsMap['SITE_URL'] = `http://localhost:${availablePorts.KONG_HTTP_PORT}`
+      portsChanged = true
+    }
+
+    // Step 4: Copy fresh docker-compose.yml from supabase-core
+    const coreDockerComposePath = path.join(coreDockerDir, 'docker-compose.yml')
+    const projectDockerComposePath = path.join(projectDir, 'docker-compose.yml')
+
+    let dockerComposeContent = await fs.readFile(coreDockerComposePath, 'utf8')
+
+    // Update compose project name
+    dockerComposeContent = dockerComposeContent.replace(/^name: supabase/m, `name: ${project.slug}`)
+
+    // Update container names with project slug
+    const containerMappings = [
+      { original: 'supabase-studio', replacement: `${project.slug}-studio` },
+      { original: 'supabase-kong', replacement: `${project.slug}-kong` },
+      { original: 'supabase-auth', replacement: `${project.slug}-auth` },
+      { original: 'supabase-rest', replacement: `${project.slug}-rest` },
+      { original: 'realtime-dev.supabase-realtime', replacement: `realtime-dev.${project.slug}-realtime` },
+      { original: 'supabase-storage', replacement: `${project.slug}-storage` },
+      { original: 'supabase-imgproxy', replacement: `${project.slug}-imgproxy` },
+      { original: 'supabase-meta', replacement: `${project.slug}-meta` },
+      { original: 'supabase-edge-functions', replacement: `${project.slug}-edge-functions` },
+      { original: 'supabase-analytics', replacement: `${project.slug}-analytics` },
+      { original: 'supabase-db', replacement: `${project.slug}-db` },
+      { original: 'supabase-vector', replacement: `${project.slug}-vector` },
+      { original: 'supabase-pooler', replacement: `${project.slug}-pooler` },
+      { original: 'supavisor', replacement: `${project.slug}-pooler` }
+    ]
+
+    for (const mapping of containerMappings) {
+      dockerComposeContent = dockerComposeContent.replace(
+        new RegExp(`container_name: ${mapping.original}`, 'g'),
+        `container_name: ${mapping.replacement}`
+      )
+      // Also update service name
+      dockerComposeContent = dockerComposeContent.replace(
+        new RegExp(`^  ${mapping.original}:`, 'gm'),
+        `  ${mapping.replacement}:`
+      )
+    }
+
+    // Update port mappings with environment variables
+    dockerComposeContent = dockerComposeContent.replace(
+      /- 4000:4000/g,
+      `- \${ANALYTICS_PORT}:4000`
+    )
+
+    await fs.writeFile(projectDockerComposePath, dockerComposeContent)
+    console.log('docker-compose.yml restored')
+
+    // Step 5: Write .env file with pgbouncer=true for Prisma compatibility
+    const envFilePath = path.join(projectDir, '.env')
+    
+    // Ensure all required environment variables exist
+    const defaultEnvVars: Record<string, string> = {
+      STORAGE_TENANT_ID: 'stub',
+      REGION: 'stub',
+      S3_PROTOCOL_ACCESS_KEY_ID: '',
+      S3_PROTOCOL_ACCESS_KEY_SECRET: '',
+      GLOBAL_S3_BUCKET: 'stub',
+      IMGPROXY_AUTO_WEBP: '',
+      ANALYTICS_BACKEND: 'postgres',
+    }
+    
+    // Merge with existing env vars, filling in defaults for missing ones
+    for (const [key, value] of Object.entries(defaultEnvVars)) {
+      if (!envVarsMap[key]) {
+        envVarsMap[key] = value
+      }
+    }
+    
+    // Add pgbouncer=true to DATABASE_URL for Prisma compatibility with pooler
+    if (envVarsMap.DATABASE_URL && !envVarsMap.DATABASE_URL.includes('pgbouncer')) {
+      envVarsMap.DATABASE_URL = envVarsMap.DATABASE_URL + '&pgbouncer=true'
+    }
+    
+    const envContent = Object.entries(envVarsMap)
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n')
+    await fs.writeFile(envFilePath, envContent)
+    console.log('.env file restored with all required variables')
+
+    // Save updated env vars to database (including DATABASE_URL with pgbouncer and storage vars)
+    for (const [key, value] of Object.entries(envVarsMap)) {
+      await prisma.projectEnvVar.upsert({
+        where: { projectId_key: { projectId, key } },
+        update: { value },
+        create: { projectId, key, value }
+      })
+    }
+    console.log('Environment variables saved to database')
+
+    // Step 6: Write init-db.sql
+    try {
+      const initScriptTemplatePath = path.join(process.cwd(), 'src', 'templates', 'init-db.sql.template')
+      const initScriptTemplate = await fs.readFile(initScriptTemplatePath, 'utf8')
+      const initScript = initScriptTemplate.replace(
+        /{{POSTGRES_PASSWORD}}/g,
+        envVarsMap.POSTGRES_PASSWORD || 'postgres'
+      )
+      const initScriptPath = path.join(projectDir, 'init-db.sql')
+      await fs.writeFile(initScriptPath, initScript)
+      console.log('init-db.sql restored')
+    } catch (initError) {
+      console.warn('Could not restore init-db.sql:', initError)
+    }
+
+    // Step 7: Copy only essential volume files needed for containers to start
+    const isWindows = process.platform === 'win32'
+    const projectVolumesDir = path.join(projectDir, 'volumes')
+    
+    try {
+      // Create volumes directory structure
+      await fs.mkdir(projectVolumesDir, { recursive: true })
+      
+      // Copy Kong-specific volumes (required for Kong to start)
+      const kongVolumesDir = path.join(projectVolumesDir, 'api')
+      await fs.mkdir(kongVolumesDir, { recursive: true })
+      
+      // Copy kong.yml
+      const coreKongYml = path.join(coreDockerDir, 'volumes', 'api', 'kong.yml')
+      if (await fs.access(coreKongYml).then(() => true).catch(() => false)) {
+        await fs.copyFile(coreKongYml, path.join(kongVolumesDir, 'kong.yml'))
+        console.log('Copied kong.yml')
+      }
+      
+      // Copy kong-entrypoint.sh
+      const coreKongEntry = path.join(coreDockerDir, 'volumes', 'api', 'kong-entrypoint.sh')
+      if (await fs.access(coreKongEntry).then(() => true).catch(() => false)) {
+        const entryContent = await fs.readFile(coreKongEntry, 'utf8')
+        // Ensure Unix line endings
+        const fixedContent = entryContent.replace(/\r\n/g, '\n')
+        await fs.writeFile(path.join(kongVolumesDir, 'kong-entrypoint.sh'), fixedContent)
+        console.log('Copied kong-entrypoint.sh')
+        
+        // Make executable (Unix only)
+        if (!isWindows) {
+          await execAsync(`chmod +x "${path.join(kongVolumesDir, 'kong-entrypoint.sh')}"`)
+        }
+      }
+      
+      // Copy studio volumes
+      const studioVolumesDir = path.join(projectVolumesDir, 'studio')
+      await fs.mkdir(studioVolumesDir, { recursive: true })
+      
+      const coreSnippetsDir = path.join(coreDockerDir, 'volumes', 'snippets')
+      if (await fs.access(coreSnippetsDir).then(() => true).catch(() => false)) {
+        await fs.mkdir(path.join(projectVolumesDir, 'snippets'), { recursive: true })
+        await fs.mkdir(path.join(projectVolumesDir, 'functions'), { recursive: true })
+        console.log('Created studio volumes directories')
+      }
+      
+      // Copy db volumes (pooler.sql for initialization)
+      const dbVolumesDir = path.join(projectVolumesDir, 'db')
+      await fs.mkdir(dbVolumesDir, { recursive: true })
+      
+      const corePoolerSql = path.join(coreDockerDir, 'volumes', 'db', 'pooler.sql')
+      if (await fs.access(corePoolerSql).then(() => true).catch(() => false)) {
+        await fs.copyFile(corePoolerSql, path.join(dbVolumesDir, 'pooler.sql'))
+        console.log('Copied pooler.sql')
+      }
+      
+      console.log('Essential volumes copied')
+    } catch (volError) {
+      console.warn('Could not copy volumes:', volError)
+    }
+
+    // Step 7b: Create pooler.exs with correct configuration (with String.to_integer)
+    try {
+      const poolerVolumesDir = path.join(projectVolumesDir, 'pooler')
+      await fs.mkdir(poolerVolumesDir, { recursive: true })
+      
+      const poolerExsPath = path.join(poolerVolumesDir, 'pooler.exs')
+      const poolerContent = `{:ok, _} = Application.ensure_all_started(:supavisor)
+
+{:ok, version} =
+  case Supavisor.Repo.query!("select version()") do
+    %{rows: [[ver]]} -> Supavisor.Helpers.parse_pg_version(ver)
+    _ -> nil
+  end
+
+params = %{
+  "external_id" => System.get_env("POOLER_TENANT_ID"),
+  "db_host" => "db",
+  "db_port" => String.to_integer(System.get_env("POSTGRES_PORT")),
+  "db_database" => System.get_env("POSTGRES_DB"),
+  "require_user" => false,
+  "auth_query" => "SELECT * FROM pgbouncer.get_auth($1)",
+  "default_max_clients" => System.get_env("POOLER_MAX_CLIENT_CONN"),
+  "default_pool_size" => System.get_env("POOLER_DEFAULT_POOL_SIZE"),
+  "default_parameter_status" => %{"server_version" => version},
+  "users" => [%{
+    "db_user" => "pgbouncer",
+    "db_password" => System.get_env("POSTGRES_PASSWORD"),
+    "mode_type" => System.get_env("POOLER_POOL_MODE"),
+    "pool_size" => System.get_env("POOLER_DEFAULT_POOL_SIZE"),
+    "is_manager" => true
+  }]
+}
+
+if !Supavisor.Tenants.get_tenant_by_external_id(params["external_id"]) do
+  {:ok, _} = Supavisor.Tenants.create_tenant(params)
+end
+`
+      
+      await fs.writeFile(poolerExsPath, poolerContent)
+      console.log('Created pooler.exs with String.to_integer conversion')
+    } catch (poolerFixError) {
+      console.warn('Could not create pooler.exs:', poolerFixError)
+    }
+
+    // Step 8: Start containers
+    console.log('Starting containers...')
+    
+    // First try to start existing containers
+    try {
+      console.log('Attempting docker compose start...')
+      await execAsync('docker compose start', {
+        cwd: projectDir,
+        timeout: 180000
+      })
+      console.log('Containers started successfully')
+    } catch (startError) {
+      console.log('Start failed, trying docker compose up...')
+      try {
+        // First pull latest images
+        console.log('Pulling latest images...')
+        await execAsync('docker compose pull', {
+          cwd: projectDir,
+          timeout: 300000,
+          maxBuffer: 1024 * 1024 * 20
+        })
+        
+        console.log('Starting containers with up...')
+        await execAsync('docker compose up -d', {
+          cwd: projectDir,
+          timeout: 600000,
+          maxBuffer: 1024 * 1024 * 20
+        })
+        console.log('Containers started successfully')
+      } catch (upError) {
+        const errorMsg = upError instanceof Error ? upError.message : String(upError)
+        console.log('Docker up error:', errorMsg)
+        
+        // Check all container status
+        try {
+          console.log('Checking container status...')
+          const { stdout: psOutput } = await execAsync('docker ps -a --filter "name=' + project.slug + '" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"', {
+            timeout: 30000
+          })
+          console.log('Container status:\n', psOutput)
+          
+          // Check which containers are unhealthy
+          const { stdout: unhealthy } = await execAsync('docker ps --filter "name=' + project.slug + '" --filter "health=unhealthy" --format "{{.Names}}: {{.Status}}"', {
+            timeout: 30000
+          })
+          if (unhealthy) {
+            console.log('Unhealthy containers:', unhealthy)
+          }
+          
+          // Get Kong logs
+          console.log('Getting Kong logs...')
+          const { stdout: kongLogs } = await execAsync('docker logs ' + project.slug + '-kong --tail 50 2>&1', {
+            timeout: 30000,
+            maxBuffer: 1024 * 1024
+          })
+          console.log('Kong logs:', kongLogs)
+        } catch (psError) {
+          console.log('Could not get container status/logs:', psError)
+        }
+        
+        throw new Error('Failed to start containers. Check Docker Desktop and try again.')
+      }
+    }
+
+    console.log(`Project ${project.name} restored successfully`)
+
+    const result: any = { success: true, project }
+    if (portsChanged) {
+      result.newPorts = {
+        POSTGRES_PORT: envVarsMap['POSTGRES_PORT'],
+        POOLER_PROXY_PORT_TRANSACTION: envVarsMap['POOLER_PROXY_PORT_TRANSACTION']
+      }
+    }
+    return result
+  } catch (error) {
+    console.error(`Failed to restore project ${projectId}:`, error)
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+  }
+}
+
+export async function updateProjectToLatest(projectId: string) {
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+    })
+
+    if (!project) {
+      throw new Error('Project not found')
+    }
+
+    const projectDir = path.join(process.cwd(), 'supabase-projects', project.slug, 'docker')
+
+    // Verify Docker is running before attempting any operations
+    const dockerCheck = await checkDockerPrerequisites()
+    if (!dockerCheck.docker || !dockerCheck.dockerCompose) {
+      throw new Error('Docker is not running. Please start Docker Desktop and try again.')
+    }
+
+    // Step 1: Stop Docker containers
+    console.log(`Stopping containers for project ${project.slug}...`)
+    try {
+      await execAsync('docker compose stop', { cwd: projectDir, timeout: 60000 })
+    } catch (stopError) {
+      console.log('Containers not running or already stopped, continuing...')
+    }
+
+    // Step 2: Update supabase-core reference (git pull)
+    const coreDir = path.join(process.cwd(), 'supabase-core')
+    if (await fs.access(coreDir).then(() => true).catch(() => false)) {
+      console.log('Updating supabase-core reference...')
+      try {
+        await execAsync('git fetch origin', { cwd: coreDir, timeout: 60000 })
+        await execAsync('git reset --hard origin/master', { cwd: coreDir, timeout: 60000 })
+        console.log('supabase-core updated')
+      } catch {
+        console.log('Could not update supabase-core (git error)')
+      }
+    }
+
+    // Step 3: Update .env file from database
+    const envVars = await prisma.projectEnvVar.findMany({
+      where: { projectId },
+    })
+    const envVarsMap: Record<string, string> = {}
+    envVars.forEach(ev => {
+      envVarsMap[ev.key] = ev.value
+    })
+
+    const envFilePath = path.join(projectDir, '.env')
+    const envContent = Object.entries(envVarsMap)
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n')
+    await fs.writeFile(envFilePath, envContent)
+    console.log(`.env file synced from database`)
+
+    // Step 4: Restart containers
+    console.log(`Starting containers for project ${project.slug}...`)
+    
+    try {
+      console.log(`Attempting to start existing containers...`)
+      await execAsync('docker compose start', {
+        cwd: projectDir,
+        timeout: 120000
+      })
+      console.log(`Containers started for project ${project.slug}`)
+    } catch (startError) {
+      console.log(`Start failed, attempting docker compose up...`)
+      try {
+        await execAsync('docker compose up -d --remove-orphans', {
+          cwd: projectDir,
+          timeout: 600000,
+          maxBuffer: 1024 * 1024 * 20
+        })
+        console.log(`Containers started for project ${project.slug}`)
+      } catch (upError) {
+        throw new Error('Failed to start containers. Try restoring the project.')
+      }
+    }
+
+    console.log(`Project ${project.slug} updated successfully`)
+    return { success: true, project }
+  } catch (error) {
+    console.error(`Failed to update project ${projectId}:`, error)
+    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+  }
+}
+
+export interface UpdateAllProjectsResult {
+  success: boolean
+  updated: string[]
+  failed: { projectId: string; name: string; error: string }[]
+  error?: string
+}
+
+export async function updateAllProjects(): Promise<UpdateAllProjectsResult> {
+  const result: UpdateAllProjectsResult = {
+    success: true,
+    updated: [],
+    failed: []
+  }
+
+  try {
+    // Step 0: Verify Docker is running
+    console.log('Checking Docker prerequisites...')
+    const dockerCheck = await checkDockerPrerequisites()
+    
+    if (!dockerCheck.docker) {
+      throw new Error('Docker is not installed or not running. Please start Docker Desktop and try again.')
+    }
+    
+    if (!dockerCheck.dockerCompose) {
+      throw new Error('Docker Compose is not available. Please ensure Docker Desktop includes Docker Compose.')
+    }
+    
+    if (!dockerCheck.internetConnection) {
+      console.warn('No internet connection detected. Updates may fail if new images are needed.')
+    }
+    
+    console.log('Docker prerequisites check passed')
+
+    // Step 1: Update supabase-core to latest version
+    const coreDir = path.join(process.cwd(), 'supabase-core')
+    
+    if (await fs.access(coreDir).then(() => true).catch(() => false)) {
+      console.log('Updating supabase-core to latest version...')
+      try {
+        await execAsync('git fetch origin', { cwd: coreDir, timeout: 60000 })
+        await execAsync('git reset --hard origin/master', { cwd: coreDir, timeout: 60000 })
+        console.log('supabase-core updated successfully')
+      } catch (gitError) {
+        console.warn('Could not update supabase-core (git error):', gitError)
+      }
+    } else {
+      throw new Error('supabase-core directory not found. Please initialize first.')
+    }
+
+    // Step 2: Get all projects from database
+    const projects = await prisma.project.findMany({
+      orderBy: { createdAt: 'asc' }
+    })
+
+    // Step 3: Update each project sequentially
+    for (const project of projects) {
+      console.log(`Updating project: ${project.name}...`)
+      const updateResult = await updateProjectToLatest(project.id)
+      
+      if (updateResult.success) {
+        result.updated.push(project.name)
+      } else {
+        result.failed.push({
+          projectId: project.id,
+          name: project.name,
+          error: updateResult.error || 'Unknown error'
+        })
+      }
+    }
+
+    result.success = result.failed.length === 0
+    return result
+  } catch (error) {
+    console.error('Failed to update all projects:', error)
+    return {
+      success: false,
+      updated: [],
+      failed: [],
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}

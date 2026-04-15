@@ -5,13 +5,37 @@ import { prisma } from './db'
 
 const execAsync = promisify(exec)
 
+// Ports known to be problematic on Windows (reserved by Hyper-V, Docker, etc.)
+const WINDOWS_RESERVED_PORTS = new Set([
+    135, 136, 137, 138, 139, // NetBIOS
+    445, // SMB
+    500, 1701, 4500, // VPN
+    3306, // MySQL
+    5432, // PostgreSQL (often reserved)
+    54320, 54321, 54322, 54323, 54324, 54325, // Common Supabase/Docker ports
+    50000, 50001, // Docker
+    30000, 30001, 30002, 30003, 30004, 30005, // Docker exposed ports
+    80, 443, // HTTP/HTTPS
+    22, // SSH
+    3389, // RDP
+    5985, 5986, // WinRM
+    8080, 8443, // Common web
+    6379, // Redis
+    27017, // MongoDB
+    11211, // Memcached
+])
+
 /**
  * Check if a specific port is available on the system
  * @param port - The port number to check
  * @returns Promise<boolean> - true if port is available, false if occupied
  */
 export async function isPortAvailable(port: number): Promise<boolean> {
-    // Method 1: Try to create a server on the port (cross-platform)
+    // Skip known Windows reserved ports
+    if (WINDOWS_RESERVED_PORTS.has(port)) {
+        return false
+    }
+
     return new Promise((resolve) => {
         const server = net.createServer()
 
@@ -94,7 +118,6 @@ export async function getUsedPortsFromDatabase(): Promise<Set<number>> {
         }
     } catch (error) {
         console.warn('Could not query database for used ports:', error)
-        // Return empty set on error - will fall back to system port checking
     }
 
     return usedPorts
@@ -117,7 +140,7 @@ export async function findAvailablePorts(
     for (const config of portConfigs) {
         let port = config.startPort
         let attempts = 0
-        const maxAttempts = 100
+        const maxAttempts = 200 // Increased to find more available ports
 
         while (attempts < maxAttempts) {
             // Skip if we've already assigned this port in this batch or it's reserved

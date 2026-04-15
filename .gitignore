@@ -42,3 +42,7 @@ next-env.d.ts
 /supabase-projects
 
 .env
+
+# Database - local development (contains sensitive data)
+prisma/dev.db
+!prisma/dev.db.template

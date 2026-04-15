@@ -619,19 +619,46 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Database URL (via Pooler)</Label>
+                    <Label htmlFor="pooler_proxy_port_transaction">Pooler Proxy Port (Transaction)</Label>
                     <div className="flex gap-2">
                       <Input
-                        type="text"
-                        readOnly
-                        value={`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@127.0.0.1:${envVars.POSTGRES_PORT}/${envVars.POSTGRES_DB}`}
+                        id="pooler_proxy_port_transaction"
+                        type="number"
+                        min="1024"
+                        max="65535"
+                        value={envVars.POOLER_PROXY_PORT_TRANSACTION}
+                        onChange={createInputHandler('POOLER_PROXY_PORT_TRANSACTION')}
                         className="font-mono text-sm"
                       />
                       <Button
                         type="button"
                         variant="outline"
                         onClick={() => {
-                          navigator.clipboard.writeText(`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@127.0.0.1:${envVars.POSTGRES_PORT}/${envVars.POSTGRES_DB}`)
+                          navigator.clipboard.writeText(envVars.POOLER_PROXY_PORT_TRANSACTION)
+                        }}
+                      >
+                        Copy
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Puerto del pooler en modo transacción (Supavisor). Cámbialo manualmente si Windows ya ocupa ese puerto.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Database URL (via Pooler)</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        readOnly
+                        value={`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@127.0.0.1:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB}`}
+                        className="font-mono text-sm"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          navigator.clipboard.writeText(`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@127.0.0.1:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB}`)
                         }}
                       >
                         Copy
@@ -899,16 +926,31 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                     <Label htmlFor="kong_http_port">Kong HTTP Port</Label>
                     <Input
                       id="kong_http_port"
-                      type="text"
+                      type="number"
+                      min="1024"
+                      max="65535"
                       value={envVars.KONG_HTTP_PORT}
                       onChange={createInputHandler('KONG_HTTP_PORT')}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="kong_https_port">Kong HTTPS Port</Label>
+                    <Input
+                      id="kong_https_port"
+                      type="number"
+                      min="1024"
+                      max="65535"
+                      value={envVars.KONG_HTTPS_PORT}
+                      onChange={createInputHandler('KONG_HTTPS_PORT')}
                     />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="analytics_port">Analytics Port</Label>
                     <Input
                       id="analytics_port"
-                      type="text"
+                      type="number"
+                      min="1024"
+                      max="65535"
                       value={envVars.ANALYTICS_PORT}
                       onChange={createInputHandler('ANALYTICS_PORT')}
                     />
