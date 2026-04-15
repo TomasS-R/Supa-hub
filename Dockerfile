@@ -24,10 +24,12 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/next.config.js ./
 COPY --from=builder /app/package.json ./
+COPY --from=builder /app/docker-entrypoint.sh ./
 
+RUN chmod +x docker-entrypoint.sh
 RUN mkdir -p .next/cache
 
 EXPOSE 3000
 ENV PORT 3000
 ENV HOSTNAME 0.0.0.0
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node server.js"]
+ENTRYPOINT ["./docker-entrypoint.sh"]
