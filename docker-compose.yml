@@ -6,11 +6,9 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3001:3000"
+      - "3000:3000"
     environment:
       - DATABASE_URL=file:./prisma/dev.db
-      - NEXTAUTH_URL=http://localhost:3000
-      - NEXTAUTH_SECRET=your-secret-here-change-in-production
     volumes:
       - ./prisma:/app/prisma
     restart: unless-stopped
