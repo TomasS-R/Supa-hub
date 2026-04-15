@@ -10,9 +10,9 @@ if [ -z "$DATABASE_URL" ]; then
 fi
 
 echo "DATABASE_URL is set, running prisma db push..."
-npx prisma db push --accept-data-loss 2>&1 || {
+node ./node_modules/prisma/build/index.js db push --accept-data-loss 2>&1 || {
   echo "WARNING: prisma db push failed, but continuing..."
 }
 
 echo "Starting server..."
-exec node server.js
+exec ./node_modules/.bin/next start
