@@ -16,6 +16,7 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV production
+ENV DATABASE_URL=""
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs
 COPY --from=builder /app/public ./public
@@ -25,7 +26,6 @@ COPY --from=builder /app/.next/server ./.next/server
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/next.config.js ./
 COPY --from=builder /app/package.json ./
-COPY --from=builder /app/.env* ./
 
 RUN mkdir -p .next/cache && chown -R nextjs:nodejs .next
 

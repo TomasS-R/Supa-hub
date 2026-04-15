@@ -5,8 +5,4 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    environment:
-      - DATABASE_URL=file:./prisma/dev.db
-    volumes:
-      - ./prisma:/app/prisma
     restart: unless-stopped
