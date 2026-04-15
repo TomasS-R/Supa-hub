@@ -1,13 +1,17 @@
-#!/bin/sh
+﻿#!/bin/sh
 set -e
 
 echo "=== SupaConsole Startup ==="
 echo "Checking DATABASE_URL..."
 
+# Debug: show all available env vars (masking values)
+echo "All environment variables:"
+env | sort | while IFS='=' read -r key value; do
+  echo "  $key=***"
+done
+
 if [ -z "$DATABASE_URL" ]; then
   echo "ERROR: DATABASE_URL is not set!"
-  echo "Available env vars:"
-  env | grep -i database || echo "No DATABASE vars found"
   exit 1
 fi
 
