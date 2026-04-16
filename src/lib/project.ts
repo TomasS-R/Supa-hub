@@ -123,21 +123,25 @@ export async function initializeSupabaseCore() {
   const projectsDir = path.join(process.cwd(), 'supabase-projects')
 
   try {
-    // Check if directories already exist
-    const coreExists = await fs.access(coreDir).then(() => true).catch(() => false)
-    const projectsExists = await fs.access(projectsDir).then(() => true).catch(() => false)
+    // Check if the docker directory exists to ensure it was cloned properly
+    const coreDockerDir = path.join(coreDir, 'docker')
+    const isCoreValid = await fs.access(coreDockerDir).then(() => true).catch(() => false)
 
-    // Create supabase-projects directory if it doesn't exist
-    if (!projectsExists) {
-      await fs.mkdir(projectsDir, { recursive: true })
-    }
-
-    // Clone repository if supabase-core doesn't exist
-    if (!coreExists) {
+    // Clone repository if supabase-core doesn't exist or is invalid
+    if (!isCoreValid) {
+      // Remove any partial or invalid clone
+      await fs.rm(coreDir, { recursive: true, force: true }).catch(() => {})
+      
       const repoUrl = process.env.SUPABASE_CORE_REPO_URL || 'https://github.com/supabase/supabase'
 
       // Use shallow clone for faster download
       await execAsync(`git clone --depth 1 ${repoUrl} supabase-core`)
+    }
+
+    // Create supabase-projects directory if it doesn't exist
+    const projectsExists = await fs.access(projectsDir).then(() => true).catch(() => false)
+    if (!projectsExists) {
+      await fs.mkdir(projectsDir, { recursive: true })
     }
 
     return { success: true }
