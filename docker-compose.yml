@@ -9,6 +9,7 @@ services:
       - dokploy-network
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /app/supabase-projects:/app/supabase-projects
     restart: unless-stopped
 
 networks:
