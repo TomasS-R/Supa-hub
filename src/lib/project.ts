@@ -177,6 +177,16 @@ export async function createProject(name: string, userId: string, description?: 
     // Copy docker folder from supabase-core
     await fs.mkdir(projectDir, { recursive: true })
 
+    // Ensure supabase-core exists before copying (fallback in case it wasn't initialized)
+    const coreDockerExists = await fs.access(coreDockerDir).then(() => true).catch(() => false)
+    if (!coreDockerExists) {
+      console.log('supabase-core/docker missing during project creation. Running initialization fallback...')
+      const initResult = await initializeSupabaseCore()
+      if (!initResult.success) {
+        throw new Error(`Failed to initialize Supabase core before creation: ${initResult.error}`)
+      }
+    }
+
     // Use cross-platform copy command
     const isWindows = process.platform === 'win32'
     const copyCommand = isWindows
@@ -270,11 +280,11 @@ export async function createProject(name: string, userId: string, description?: 
       POOLER_TENANT_ID: `project-${timestamp}`,
       POOLER_DB_POOL_SIZE: '5',
       PGRST_DB_SCHEMAS: 'public,storage,graphql_public',
-      SITE_URL: `http://localhost:${availablePorts.KONG_HTTP_PORT}`,
+      SITE_URL: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost'}:${availablePorts.KONG_HTTP_PORT}`,
       ADDITIONAL_REDIRECT_URLS: '',
       JWT_EXPIRY: '3600',
       DISABLE_SIGNUP: 'false',
-      API_EXTERNAL_URL: `http://localhost:${availablePorts.KONG_HTTP_PORT}`,
+      API_EXTERNAL_URL: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost'}:${availablePorts.KONG_HTTP_PORT}`,
       MAILER_URLPATHS_CONFIRMATION: '/auth/v1/verify',
       MAILER_URLPATHS_INVITE: '/auth/v1/verify',
       MAILER_URLPATHS_RECOVERY: '/auth/v1/verify',
@@ -293,7 +303,7 @@ export async function createProject(name: string, userId: string, description?: 
       STUDIO_DEFAULT_ORGANIZATION: 'Default Organization',
       STUDIO_DEFAULT_PROJECT: 'Default Project',
       STUDIO_PORT: availablePorts.STUDIO_PORT.toString(),
-      SUPABASE_PUBLIC_URL: `http://localhost:${availablePorts.KONG_HTTP_PORT}`,
+      SUPABASE_PUBLIC_URL: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost'}:${availablePorts.KONG_HTTP_PORT}`,
       IMGPROXY_ENABLE_WEBP_DETECTION: 'true',
       OPENAI_API_KEY: '',
       FUNCTIONS_VERIFY_JWT: 'false',
