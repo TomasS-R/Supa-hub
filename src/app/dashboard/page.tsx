@@ -165,17 +165,20 @@ export default function DashboardPage() {
 
         // Extract URLs from environment variables
         const urls: Record<string, string> = {}
+        const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+        const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
+        
         if (envVars.KONG_HTTP_PORT) {
-          urls['API Gateway'] = `http://localhost:${envVars.KONG_HTTP_PORT}`
+          urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
         }
         if (envVars.STUDIO_PORT) {
-          urls['Supabase Studio'] = `http://localhost:${envVars.STUDIO_PORT}`
+          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
         }
         if (envVars.ANALYTICS_PORT) {
-          urls['Analytics (Logflare)'] = `http://localhost:${envVars.ANALYTICS_PORT}`
+          urls['Analytics (Logflare)'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
         }
         if (envVars.POSTGRES_PORT) {
-          urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@localhost:${envVars.POSTGRES_PORT}/postgres`
+          urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
         }
 
         setProjectUrls(urls)
