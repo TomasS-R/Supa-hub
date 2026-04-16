@@ -311,7 +311,13 @@ export async function createProject(name: string, userId: string, description?: 
       LOGFLARE_PRIVATE_ACCESS_TOKEN: generateRandomString(64),
       DOCKER_SOCKET_LOCATION: '/var/run/docker.sock',
       GOOGLE_PROJECT_ID: 'GOOGLE_PROJECT_ID',
-      GOOGLE_PROJECT_NUMBER: 'GOOGLE_PROJECT_NUMBER'
+      GOOGLE_PROJECT_NUMBER: 'GOOGLE_PROJECT_NUMBER',
+      GLOBAL_S3_BUCKET: 'stub',
+      S3_PROTOCOL_ACCESS_KEY_ID: generateRandomString(32),
+      S3_PROTOCOL_ACCESS_KEY_SECRET: generateRandomString(64),
+      REGION: 'stub',
+      STORAGE_TENANT_ID: 'stub',
+      IMGPROXY_AUTO_WEBP: 'true'
     }
 
     // Write initial .env file with unique defaults
@@ -360,7 +366,15 @@ export async function createProject(name: string, userId: string, description?: 
         }
       }
 
-      // 2. Update the compose project name to be unique
+      // 2. Update healthcheck retries to 30 to give heavy containers (e.g. analytics) more time to start
+      if (line.includes('retries: 10')) {
+        updatedLine = line.replace('retries: 10', 'retries: 30')
+      }
+      if (line.includes('retries: 3')) {
+        updatedLine = line.replace('retries: 3', 'retries: 10')
+      }
+
+      // 3. Update the compose project name to be unique
       if (line.startsWith('name: supabase')) {
         updatedLine = `name: ${slug}`
       }
