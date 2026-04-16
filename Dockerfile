@@ -16,7 +16,7 @@ RUN npm run build
 
 FROM base AS runner
 WORKDIR /app
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl git docker-cli docker-cli-compose curl bind-tools
 ENV NODE_ENV=production
 
 COPY --from=builder /app/package.json ./
