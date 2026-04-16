@@ -134,8 +134,11 @@ export async function initializeSupabaseCore() {
       
       const repoUrl = process.env.SUPABASE_CORE_REPO_URL || 'https://github.com/supabase/supabase'
 
-      // Use shallow clone for faster download
-      await execAsync(`git clone --depth 1 ${repoUrl} supabase-core`)
+      // Use robust curl and tar to download the repository, bypassing git completely
+      await execAsync(`curl -sL ${repoUrl}/archive/refs/heads/master.tar.gz -o /tmp/supabase.tar.gz`);
+      await execAsync(`tar -xzf /tmp/supabase.tar.gz -C /tmp`);
+      await execAsync(`mv /tmp/supabase-master supabase-core`);
+      await execAsync(`rm /tmp/supabase.tar.gz`)
     }
 
     // Create supabase-projects directory if it doesn't exist
