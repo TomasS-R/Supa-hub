@@ -7,4 +7,13 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env
+    networks:
+      - dokploy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.services.supaconsole.loadbalancer.server.port=3000"
     restart: unless-stopped
+
+networks:
+  dokploy-network:
+    external: true
