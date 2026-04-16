@@ -517,18 +517,26 @@ export async function deployProject(projectId: string) {
 
     } catch (composeError) {
       // If the main docker compose command fails, provide better error message
-      const errorMessage = composeError instanceof Error ? composeError.message : 'Unknown Docker error'
+      let errorMessage = composeError instanceof Error ? composeError.message : 'Unknown Docker error'
+
+      // Attempt to fetch container logs to see why they failed
+      try {
+        const { stdout: containerLogs } = await execAsync('docker compose logs --tail=50 db analytics', { cwd: projectDir })
+        if (containerLogs) {
+          errorMessage += `\n\n--- Container Failing Logs ---\n${containerLogs}`
+        }
+      } catch (logError) {
+        // Ignore errors fetching logs
+      }
 
       if (errorMessage.includes('maxBuffer length exceeded')) {
-        throw new Error('Docker deployment generated too much output. This usually means the deployment is working but Docker is downloading many large images. Please wait a few more minutes and check Docker Desktop to see if containers are starting. You can also try running "docker compose up -d" manually in the project directory.')
+        throw new Error('Docker deployment generated too much output. This usually means the deployment is working but Docker is downloading many large images. Please wait a few more minutes and check Docker Desktop or Server.')
       } else if (errorMessage.includes('no such host') || errorMessage.includes('dial tcp')) {
-        throw new Error('Network connectivity issue: Unable to reach Docker registry. This might be due to:\n\n1. Internet connection issues\n2. Corporate firewall blocking Docker registry\n3. DNS resolution problems\n\nSolution: Try running "docker pull supabase/postgres" manually to test connectivity, or work with your IT team to allow access to Docker Hub.')
+        throw new Error(`Network connectivity issue: Unable to reach Docker registry.\n${errorMessage}`)
       } else if (errorMessage.includes('permission denied')) {
-        throw new Error('Docker permission denied. Please ensure:\n\n1. Docker Desktop is running\n2. Your user is in the "docker" group (Linux/Mac)\n3. You have administrator privileges (Windows)')
-      } else if (errorMessage.includes('not found')) {
-        throw new Error('Docker or Docker Compose not found. Please install Docker Desktop from https://docker.com/products/docker-desktop')
-      } else if (errorMessage.includes('image') && errorMessage.includes('not found')) {
-        throw new Error('Required Docker images not found. Please ensure you have internet connectivity and try again, or manually pull images with "docker compose pull"')
+        throw new Error(`Docker permission denied. Please ensure your environment has privileges.\n${errorMessage}`)
+      } else if (errorMessage.includes('dependency failed to start')) {
+        throw new Error(`A critical Supabase container crashed during startup (likely Out of Memory on a VPS, or a configuration error). Check if your server has at least 4GB of RAM.\n${errorMessage}`)
       } else {
         throw new Error(`Docker deployment failed: ${errorMessage}`)
       }
