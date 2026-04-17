@@ -123,20 +123,17 @@ export async function initializeSupabaseCore() {
   const projectsDir = path.join(process.cwd(), 'supabase-projects')
 
   try {
-    // Check if the docker directory exists to ensure it was cloned properly
     const coreDockerDir = path.join(coreDir, 'docker')
     const isCoreValid = await fs.access(coreDockerDir).then(() => true).catch(() => false)
 
-    // Clone repository if supabase-core doesn't exist or is invalid
     if (!isCoreValid) {
       // Remove any partial or invalid clone
       await fs.rm(coreDir, { recursive: true, force: true }).catch(() => {})
       
-      // Pinned to a verified stable tag — do NOT use 'master' to avoid breaking changes
+      // Pinned to a verified stable tag
       const SUPABASE_PINNED_VERSION = process.env.SUPABASE_VERSION || 'v1.24.09'
       const repoUrl = process.env.SUPABASE_CORE_REPO_URL || 'https://github.com/supabase/supabase'
 
-      // Shallow clone: only the docker/ folder matters, so --depth 1 skips all git history (~500MB saved)
       console.log(`Cloning Supabase repository (tag: ${SUPABASE_PINNED_VERSION})...`);
       await execAsync(
         `git clone --depth 1 --single-branch --branch ${SUPABASE_PINNED_VERSION} ${repoUrl} "${coreDir}"`,
@@ -144,11 +141,7 @@ export async function initializeSupabaseCore() {
       );
     }
 
-    // Create supabase-projects directory if it doesn't exist
-    const projectsExists = await fs.access(projectsDir).then(() => true).catch(() => false)
-    if (!projectsExists) {
-      await fs.mkdir(projectsDir, { recursive: true })
-    }
+    await fs.mkdir(projectsDir, { recursive: true })
 
     return { success: true }
   } catch (error) {
@@ -169,25 +162,23 @@ function pruneDockerCompose(content: string, disabledModules: string[]): string 
   }
 
   const lines = content.split('\n');
+
+  // ── Pass 1: Remove disabled service blocks ──────────────────────────
   const prunedLines: string[] = [];
-  
   let skippingService = false;
-  let currentService = '';
 
-  // Pass 1: Remove disabled service blocks
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    
-    // Detect top level or service level (2 spaces)
+  for (const line of lines) {
+    // Top-level key (e.g. "services:", "volumes:") — always keep, resets skip
+    if (line.match(/^[a-zA-Z0-9_-]+: *\r?$/)) {
+      skippingService = false;
+      prunedLines.push(line);
+      continue;
+    }
+
+    // Service-level key (2-space indent, e.g. "  studio:")
     const serviceMatch = line.match(/^  ([a-zA-Z0-9_-]+): *\r?$/);
-    const topLevelMatch = line.match(/^([a-zA-Z0-9_-]+): *\r?$/);
-
-    if (topLevelMatch) {
-      skippingService = false; // Reset when hitting globals like `volumes:`
-      currentService = '';
-    } else if (serviceMatch) {
-      currentService = serviceMatch[1];
-      skippingService = modulesToSkip.includes(currentService);
+    if (serviceMatch) {
+      skippingService = modulesToSkip.includes(serviceMatch[1]);
     }
 
     if (!skippingService) {
@@ -195,85 +186,100 @@ function pruneDockerCompose(content: string, disabledModules: string[]): string 
     }
   }
 
-  // Pass 2: Cure orphan dependencies and environment variables
-  const finalLines: string[] = [];
+  // ── Pass 2: Cure orphan dependencies & environment variables ────────
+  const finalLines: (string | null)[] = [];
   let inDependsOn = false;
-  let emptyDependsOnIndex = -1;
-  let dependsOnChildrenCount = 0;
-  
+  let dependsOnHeaderIndex = -1;
+  let dependsOnChildCount = 0;
+  // Track existing dep names in the current depends_on block to prevent duplicate keys
+  let existingDeps: Set<string> = new Set();
+
   for (let i = 0; i < prunedLines.length; i++) {
     let line = prunedLines[i];
-    const indentMatch = line.match(/^( *)/);
-    const indentCounter = indentMatch ? indentMatch[1].length : 0;
+    const indent = (line.match(/^( *)/) || ['', ''])[1].length;
 
-    // Detect end of depends_on block (indentation jumps back to 4 or less)
-    if (inDependsOn && indentCounter <= 4 && line.trim() !== '') {
+    // Detect end of depends_on block (indent drops to 4 or less on a non-empty line)
+    if (inDependsOn && indent <= 4 && line.trim() !== '') {
       inDependsOn = false;
-      // If depends_on had no valid children left, remove the depends_on line entirely
-      if (dependsOnChildrenCount === 0 && emptyDependsOnIndex !== -1) {
-        finalLines[emptyDependsOnIndex] = null as unknown as string; // Mark for deletion
+      // If depends_on ended up empty, remove its header line
+      if (dependsOnChildCount === 0 && dependsOnHeaderIndex >= 0) {
+        finalLines[dependsOnHeaderIndex] = null;
       }
+      existingDeps = new Set();
     }
 
     // Detect start of depends_on
-    if (line.match(/^    depends_on: *\r?$/)) {
+    if (line.match(/^ {4}depends_on: *\r?$/)) {
       inDependsOn = true;
-      emptyDependsOnIndex = finalLines.length;
-      dependsOnChildrenCount = 0;
+      dependsOnHeaderIndex = finalLines.length;
+      dependsOnChildCount = 0;
+      existingDeps = new Set();
       finalLines.push(line);
       continue;
     }
 
-    // Inside depends_on, we look for service children (6 spaces)
-    if (inDependsOn && line.match(/^      ([a-zA-Z0-9_-]+): *\r?$/)) {
-      const depMatch = line.match(/^      ([a-zA-Z0-9_-]+): *\r?$/);
-      if (depMatch && modulesToSkip.includes(depMatch[1])) {
-        // Skip this line and the following condition line
-        if (i + 1 < prunedLines.length && prunedLines[i + 1].trim().startsWith('condition:')) {
-          i++; // skip condition line
+    // Inside depends_on: process dependency entries (6-space indent)
+    if (inDependsOn) {
+      const depMatch = line.match(/^ {6}([a-zA-Z0-9_-]+): *\r?$/);
+      if (depMatch) {
+        const depName = depMatch[1];
+
+        if (modulesToSkip.includes(depName)) {
+          // Skip this dependency + its condition/comment lines
+          while (i + 1 < prunedLines.length) {
+            const nextIndent = (prunedLines[i + 1].match(/^( *)/) || ['', ''])[1].length;
+            const nextTrimmed = prunedLines[i + 1].trim();
+            // Lines at 8+ spaces that are children of this dep (condition:, comments)
+            if (nextIndent >= 8 || nextTrimmed.startsWith('#')) {
+              i++;
+            } else {
+              break;
+            }
+          }
+
+          // If we removed analytics, inject db as fallback ONLY if not already present
+          if (depName === 'analytics' && !existingDeps.has('db')) {
+            finalLines.push('      db:');
+            finalLines.push('        condition: service_healthy');
+            existingDeps.add('db');
+            dependsOnChildCount++;
+          }
+          continue;
         }
-        
-        // CRITICAL FIX: If we just removed analytics from studio's dependency, 
-        // we must fallback to depending on db, otherwise Studio boots before DB and crashes!
-        if (depMatch[1] === 'analytics') {
-          finalLines.push('      db:');
-          finalLines.push('        condition: service_healthy');
-          dependsOnChildrenCount++;
-        }
-        
-        continue;
+
+        // Track this dep as existing
+        existingDeps.add(depName);
+        dependsOnChildCount++;
       }
-      dependsOnChildrenCount++;
     }
 
-    // Special environment variable curing
+    // ── Environment variable curing ───────────────────────────────────
     if (modulesToSkip.includes('analytics')) {
-      if (line.includes('NEXT_PUBLIC_ENABLE_LOGS: "true"')) {
-        line = line.replace('"true"', '"false"');
+      // Disable logs — handle both quoted and unquoted values
+      if (line.match(/NEXT_PUBLIC_ENABLE_LOGS:\s*/)) {
+        line = line.replace(/NEXT_PUBLIC_ENABLE_LOGS:\s*.*/, 'NEXT_PUBLIC_ENABLE_LOGS: "false"');
       }
-      // Remove all LOGFLARE vars
-      if (line.match(/^ *LOGFLARE_URL:/)) continue;
-      if (line.match(/^ *LOGFLARE_API_KEY:/)) continue;
-      if (line.match(/^ *LOGFLARE_PUBLIC_ACCESS_TOKEN:/)) continue;
-      if (line.match(/^ *LOGFLARE_PRIVATE_ACCESS_TOKEN:/)) continue;
+      // Remove all LOGFLARE-related variables
+      if (line.match(/^\s*(LOGFLARE_URL|LOGFLARE_API_KEY|LOGFLARE_PUBLIC_ACCESS_TOKEN|LOGFLARE_PRIVATE_ACCESS_TOKEN|NEXT_ANALYTICS_BACKEND_PROVIDER):/)) continue;
     }
 
     if (modulesToSkip.includes('imgproxy')) {
-      if (line.includes('ENABLE_IMAGE_TRANSFORMATION: "true"')) {
-        line = line.replace('"true"', '"false"');
+      if (line.match(/ENABLE_IMAGE_TRANSFORMATION:\s*/)) {
+        line = line.replace(/ENABLE_IMAGE_TRANSFORMATION:\s*.*/, 'ENABLE_IMAGE_TRANSFORMATION: "false"');
       }
-      if (line.match(/^ *IMGPROXY_URL:/)) continue;
+      if (line.match(/^\s*IMGPROXY_URL:/)) continue;
     }
 
-    // Special global volume cleanup
+    // ── Global volume cleanup ─────────────────────────────────────────
+    // Dynamically remove any named volume that belongs to a disabled service
     if (modulesToSkip.includes('functions')) {
-      if (line.match(/^  deno-cache: *\r?$/)) continue;
+      if (line.match(/^ {2}deno-cache/)) continue;
     }
 
     finalLines.push(line);
   }
 
-  return finalLines.filter((l) => l !== null).join('\n');
+  return finalLines.filter(l => l !== null).join('\n');
 }
 
 export async function createProject(name: string, userId: string, description?: string, disabledModules: string[] = []) {
@@ -428,6 +434,8 @@ export async function createProject(name: string, userId: string, description?: 
       // Dynamic ports depending on pruning status
       ...(!disabledModules.includes('analytics') ? {
         ANALYTICS_PORT: availablePorts.ANALYTICS_PORT.toString(),
+        // Generate both old-style (LOGFLARE_API_KEY) and new-style tokens for version compatibility
+        LOGFLARE_API_KEY: generateRandomString(64),
         LOGFLARE_PUBLIC_ACCESS_TOKEN: generateRandomString(64),
         LOGFLARE_PRIVATE_ACCESS_TOKEN: generateRandomString(64),
       } : {}),
