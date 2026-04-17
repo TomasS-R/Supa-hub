@@ -132,15 +132,16 @@ export async function initializeSupabaseCore() {
       // Remove any partial or invalid clone
       await fs.rm(coreDir, { recursive: true, force: true }).catch(() => {})
       
-      // Use a pinned stable version of Supabase to prevent catastrophic breaking changes
-      const SUPABASE_PINNED_VERSION = process.env.SUPABASE_VERSION || '1.24.07'
+      // Pinned to a verified stable tag — do NOT use 'master' to avoid breaking changes
+      const SUPABASE_PINNED_VERSION = process.env.SUPABASE_VERSION || 'v1.24.09'
       const repoUrl = process.env.SUPABASE_CORE_REPO_URL || 'https://github.com/supabase/supabase'
 
-      // Use robust curl and tar to download the specific tag
-      await execAsync(`curl -sL ${repoUrl}/archive/refs/tags/v${SUPABASE_PINNED_VERSION}.tar.gz -o /tmp/supabase.tar.gz`);
-      await execAsync(`tar -xzf /tmp/supabase.tar.gz -C /tmp`);
-      await execAsync(`mv /tmp/supabase-${SUPABASE_PINNED_VERSION} supabase-core`);
-      await execAsync(`rm /tmp/supabase.tar.gz`)
+      // Shallow clone: only the docker/ folder matters, so --depth 1 skips all git history (~500MB saved)
+      console.log(`Cloning Supabase repository (tag: ${SUPABASE_PINNED_VERSION})...`);
+      await execAsync(
+        `git clone --depth 1 --single-branch --branch ${SUPABASE_PINNED_VERSION} ${repoUrl} "${coreDir}"`,
+        { timeout: 120000, maxBuffer: 1024 * 1024 * 10 }
+      );
     }
 
     // Create supabase-projects directory if it doesn't exist
