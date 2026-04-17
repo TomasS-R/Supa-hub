@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "node scripts/prepare-prisma.js",
     "dev": "next dev --turbopack",
+    "prebuild": "node scripts/prepare-prisma.js",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "db:generate": "prisma generate",
-    "db:push": "prisma db push",
+    "db:push": "node scripts/prepare-prisma.js && prisma db push",
     "db:studio": "prisma studio",
-    "db:reset": "prisma db push --force-reset",
+    "db:reset": "node scripts/prepare-prisma.js && prisma db push --force-reset",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {

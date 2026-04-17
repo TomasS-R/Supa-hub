@@ -132,12 +132,14 @@ export async function initializeSupabaseCore() {
       // Remove any partial or invalid clone
       await fs.rm(coreDir, { recursive: true, force: true }).catch(() => {})
       
+      // Use a pinned stable version of Supabase to prevent catastrophic breaking changes
+      const SUPABASE_PINNED_VERSION = process.env.SUPABASE_VERSION || '1.24.07'
       const repoUrl = process.env.SUPABASE_CORE_REPO_URL || 'https://github.com/supabase/supabase'
 
-      // Use robust curl and tar to download the repository, bypassing git completely
-      await execAsync(`curl -sL ${repoUrl}/archive/refs/heads/master.tar.gz -o /tmp/supabase.tar.gz`);
+      // Use robust curl and tar to download the specific tag
+      await execAsync(`curl -sL ${repoUrl}/archive/refs/tags/v${SUPABASE_PINNED_VERSION}.tar.gz -o /tmp/supabase.tar.gz`);
       await execAsync(`tar -xzf /tmp/supabase.tar.gz -C /tmp`);
-      await execAsync(`mv /tmp/supabase-master supabase-core`);
+      await execAsync(`mv /tmp/supabase-${SUPABASE_PINNED_VERSION} supabase-core`);
       await execAsync(`rm /tmp/supabase.tar.gz`)
     }
 
@@ -154,7 +156,126 @@ export async function initializeSupabaseCore() {
   }
 }
 
-export async function createProject(name: string, userId: string, description?: string) {
+function pruneDockerCompose(content: string, disabledModules: string[]): string {
+  if (!disabledModules || disabledModules.length === 0) return content;
+
+  // Map frontend module names to docker-compose service names
+  const modulesToSkip = disabledModules.map(m => m === 'edge-functions' ? 'functions' : m);
+  
+  // Make sure vector is removed if analytics is removed
+  if (modulesToSkip.includes('analytics') && !modulesToSkip.includes('vector')) {
+    modulesToSkip.push('vector');
+  }
+
+  const lines = content.split('\n');
+  const prunedLines: string[] = [];
+  
+  let skippingService = false;
+  let currentService = '';
+
+  // Pass 1: Remove disabled service blocks
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Detect top level or service level (2 spaces)
+    const serviceMatch = line.match(/^  ([a-zA-Z0-9_-]+): *\r?$/);
+    const topLevelMatch = line.match(/^([a-zA-Z0-9_-]+): *\r?$/);
+
+    if (topLevelMatch) {
+      skippingService = false; // Reset when hitting globals like `volumes:`
+      currentService = '';
+    } else if (serviceMatch) {
+      currentService = serviceMatch[1];
+      skippingService = modulesToSkip.includes(currentService);
+    }
+
+    if (!skippingService) {
+      prunedLines.push(line);
+    }
+  }
+
+  // Pass 2: Cure orphan dependencies and environment variables
+  const finalLines: string[] = [];
+  let inDependsOn = false;
+  let emptyDependsOnIndex = -1;
+  let dependsOnChildrenCount = 0;
+  
+  for (let i = 0; i < prunedLines.length; i++) {
+    let line = prunedLines[i];
+    const indentMatch = line.match(/^( *)/);
+    const indentCounter = indentMatch ? indentMatch[1].length : 0;
+
+    // Detect end of depends_on block (indentation jumps back to 4 or less)
+    if (inDependsOn && indentCounter <= 4 && line.trim() !== '') {
+      inDependsOn = false;
+      // If depends_on had no valid children left, remove the depends_on line entirely
+      if (dependsOnChildrenCount === 0 && emptyDependsOnIndex !== -1) {
+        finalLines[emptyDependsOnIndex] = null as unknown as string; // Mark for deletion
+      }
+    }
+
+    // Detect start of depends_on
+    if (line.match(/^    depends_on: *\r?$/)) {
+      inDependsOn = true;
+      emptyDependsOnIndex = finalLines.length;
+      dependsOnChildrenCount = 0;
+      finalLines.push(line);
+      continue;
+    }
+
+    // Inside depends_on, we look for service children (6 spaces)
+    if (inDependsOn && line.match(/^      ([a-zA-Z0-9_-]+): *\r?$/)) {
+      const depMatch = line.match(/^      ([a-zA-Z0-9_-]+): *\r?$/);
+      if (depMatch && modulesToSkip.includes(depMatch[1])) {
+        // Skip this line and the following condition line
+        if (i + 1 < prunedLines.length && prunedLines[i + 1].trim().startsWith('condition:')) {
+          i++; // skip condition line
+        }
+        
+        // CRITICAL FIX: If we just removed analytics from studio's dependency, 
+        // we must fallback to depending on db, otherwise Studio boots before DB and crashes!
+        if (depMatch[1] === 'analytics') {
+          finalLines.push('      db:');
+          finalLines.push('        condition: service_healthy');
+          dependsOnChildrenCount++;
+        }
+        
+        continue;
+      }
+      dependsOnChildrenCount++;
+    }
+
+    // Special environment variable curing
+    if (modulesToSkip.includes('analytics')) {
+      if (line.includes('NEXT_PUBLIC_ENABLE_LOGS: "true"')) {
+        line = line.replace('"true"', '"false"');
+      }
+      // Remove all LOGFLARE vars
+      if (line.match(/^ *LOGFLARE_URL:/)) continue;
+      if (line.match(/^ *LOGFLARE_API_KEY:/)) continue;
+      if (line.match(/^ *LOGFLARE_PUBLIC_ACCESS_TOKEN:/)) continue;
+      if (line.match(/^ *LOGFLARE_PRIVATE_ACCESS_TOKEN:/)) continue;
+    }
+
+    if (modulesToSkip.includes('imgproxy')) {
+      if (line.includes('ENABLE_IMAGE_TRANSFORMATION: "true"')) {
+        line = line.replace('"true"', '"false"');
+      }
+      if (line.match(/^ *IMGPROXY_URL:/)) continue;
+    }
+
+    // Special global volume cleanup
+    if (modulesToSkip.includes('functions')) {
+      if (line.match(/^  deno-cache: *\r?$/)) continue;
+    }
+
+    finalLines.push(line);
+  }
+
+  return finalLines.filter((l) => l !== null).join('\n');
+}
+
+export async function createProject(name: string, userId: string, description?: string, disabledModules: string[] = []) {
   try {
     // Generate unique slug
     const timestamp = Date.now()
@@ -204,12 +325,28 @@ export async function createProject(name: string, userId: string, description?: 
       console.log('Fixed line endings in pooler.exs')
     } catch (poolerError) {
       console.warn('Could not fix pooler.exs line endings:', poolerError)
-      // Continue anyway, as this is not critical
+    }
+
+    // Fix line endings in kong-entrypoint.sh (convert CRLF to LF for bash/sh compatibility)
+    const kongScriptPath = path.join(projectDir, 'docker', 'volumes', 'api', 'kong-entrypoint.sh')
+    try {
+      const kongContent = await fs.readFile(kongScriptPath, 'utf8')
+      const fixedKongContent = kongContent.replace(/\r\n/g, '\n')
+      await fs.writeFile(kongScriptPath, fixedKongContent, 'utf8')
+      console.log('Fixed line endings in kong-entrypoint.sh')
+    } catch (kongError) {
+      console.warn('Could not fix kong-entrypoint.sh line endings:', kongError)
     }
 
     // Customize docker-compose.yml with unique container names and project-specific settings
     const dockerComposeFile = path.join(projectDir, 'docker', 'docker-compose.yml')
-    const dockerComposeContent = await fs.readFile(dockerComposeFile, 'utf8')
+    let dockerComposeContent = await fs.readFile(dockerComposeFile, 'utf8')
+    
+    // Execute Pruning engine BEFORE any other modifications!
+    if (disabledModules && disabledModules.length > 0) {
+      console.log(`Pruning docker-compose with modules: ${disabledModules.join(', ')}`)
+      dockerComposeContent = pruneDockerCompose(dockerComposeContent, disabledModules)
+    }
 
     // Define container mappings for unique names
     const containerMappings = [
@@ -235,20 +372,39 @@ export async function createProject(name: string, userId: string, description?: 
     const reservedPorts = await getUsedPortsFromDatabase()
     console.log('Reserved ports from database:', Array.from(reservedPorts))
 
-    // Then find available ports, avoiding both system-used and database-reserved ports
-    const availablePorts = await findAvailablePorts([
+    const portRequests = [
       { name: 'KONG_HTTP_PORT', startPort: 8000 },
       { name: 'KONG_HTTPS_PORT', startPort: 8443 },
-      { name: 'STUDIO_PORT', startPort: 3000 },
-      { name: 'ANALYTICS_PORT', startPort: 4000 },
       { name: 'POSTGRES_PORT', startPort: 54320 },
       { name: 'POOLER_PROXY_PORT_TRANSACTION', startPort: 54321 },
-    ], reservedPorts)
+    ]
+    if (!disabledModules.includes('studio')) {
+      portRequests.push({ name: 'STUDIO_PORT', startPort: 3000 })
+    }
+    if (!disabledModules.includes('analytics')) {
+      portRequests.push({ name: 'ANALYTICS_PORT', startPort: 4000 })
+    }
+
+    // Then find available ports, avoiding both system-used and database-reserved ports
+    const availablePorts = await findAvailablePorts(portRequests, reservedPorts)
 
     console.log('Assigned ports:', availablePorts)
 
     // Generate JWT_SECRET first so we can use it to sign the tokens
     const jwtSecret = generateRandomString(64)
+
+    // Securely parse the APP_URL to avoid generating invalid URLs like http://localhost:3000:8000
+    const appUrlStr = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost'
+    let baseHostname = 'localhost'
+    let baseProtocol = 'http'
+    try {
+      const urlObj = new URL(appUrlStr)
+      baseHostname = urlObj.hostname
+      baseProtocol = urlObj.protocol.replace(':', '')
+    } catch {
+      // ignore
+    }
+    const safePublicUrl = `${baseProtocol}://${baseHostname}:${availablePorts.KONG_HTTP_PORT}`
 
     const defaultEnvVars = {
       // Secrets - generated random values
@@ -267,7 +423,19 @@ export async function createProject(name: string, userId: string, description?: 
       POOLER_PROXY_PORT_TRANSACTION: availablePorts.POOLER_PROXY_PORT_TRANSACTION.toString(),
       KONG_HTTP_PORT: availablePorts.KONG_HTTP_PORT.toString(),
       KONG_HTTPS_PORT: availablePorts.KONG_HTTPS_PORT.toString(),
-      ANALYTICS_PORT: availablePorts.ANALYTICS_PORT.toString(),
+      
+      // Dynamic ports depending on pruning status
+      ...(!disabledModules.includes('analytics') ? {
+        ANALYTICS_PORT: availablePorts.ANALYTICS_PORT.toString(),
+        LOGFLARE_PUBLIC_ACCESS_TOKEN: generateRandomString(64),
+        LOGFLARE_PRIVATE_ACCESS_TOKEN: generateRandomString(64),
+      } : {}),
+      ...(!disabledModules.includes('studio') ? {
+        STUDIO_PORT: availablePorts.STUDIO_PORT.toString(),
+      } : {}),
+      ...(!disabledModules.includes('imgproxy') ? {
+        IMGPROXY_AUTO_WEBP: 'true',
+      } : {}),
 
       // Database
       POSTGRES_HOST: 'db',
@@ -280,11 +448,11 @@ export async function createProject(name: string, userId: string, description?: 
       POOLER_TENANT_ID: `project-${timestamp}`,
       POOLER_DB_POOL_SIZE: '5',
       PGRST_DB_SCHEMAS: 'public,storage,graphql_public',
-      SITE_URL: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost'}:${availablePorts.KONG_HTTP_PORT}`,
+      SITE_URL: safePublicUrl,
       ADDITIONAL_REDIRECT_URLS: '',
       JWT_EXPIRY: '3600',
       DISABLE_SIGNUP: 'false',
-      API_EXTERNAL_URL: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost'}:${availablePorts.KONG_HTTP_PORT}`,
+      API_EXTERNAL_URL: safePublicUrl,
       MAILER_URLPATHS_CONFIRMATION: '/auth/v1/verify',
       MAILER_URLPATHS_INVITE: '/auth/v1/verify',
       MAILER_URLPATHS_RECOVERY: '/auth/v1/verify',
@@ -302,13 +470,11 @@ export async function createProject(name: string, userId: string, description?: 
       ENABLE_PHONE_AUTOCONFIRM: 'true',
       STUDIO_DEFAULT_ORGANIZATION: 'Default Organization',
       STUDIO_DEFAULT_PROJECT: 'Default Project',
-      STUDIO_PORT: availablePorts.STUDIO_PORT.toString(),
-      SUPABASE_PUBLIC_URL: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost'}:${availablePorts.KONG_HTTP_PORT}`,
+      STUDIO_PORT: availablePorts.STUDIO_PORT ? availablePorts.STUDIO_PORT.toString() : '3000',
+      SUPABASE_PUBLIC_URL: safePublicUrl,
       IMGPROXY_ENABLE_WEBP_DETECTION: 'true',
       OPENAI_API_KEY: '',
       FUNCTIONS_VERIFY_JWT: 'false',
-      LOGFLARE_PUBLIC_ACCESS_TOKEN: generateRandomString(64),
-      LOGFLARE_PRIVATE_ACCESS_TOKEN: generateRandomString(64),
       DOCKER_SOCKET_LOCATION: '/var/run/docker.sock',
       GOOGLE_PROJECT_ID: 'GOOGLE_PROJECT_ID',
       GOOGLE_PROJECT_NUMBER: 'GOOGLE_PROJECT_NUMBER',
@@ -317,7 +483,6 @@ export async function createProject(name: string, userId: string, description?: 
       S3_PROTOCOL_ACCESS_KEY_SECRET: generateRandomString(64),
       REGION: 'stub',
       STORAGE_TENANT_ID: 'stub',
-      IMGPROXY_AUTO_WEBP: 'true'
     }
 
     // Write initial .env file with unique defaults
@@ -408,6 +573,16 @@ export async function createProject(name: string, userId: string, description?: 
           projectId: project.id,
           key,
           value,
+        },
+      })
+    }
+
+    if (disabledModules && disabledModules.length > 0) {
+      await prisma.projectEnvVar.create({
+        data: {
+          projectId: project.id,
+          key: 'DISABLED_MODULES',
+          value: disabledModules.join(','),
         },
       })
     }

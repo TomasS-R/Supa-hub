@@ -56,7 +56,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const { name, description = '' } = await request.json()
+    const { name, description = '', disabledModules = [] } = await request.json()
 
     if (!name) {
       return NextResponse.json(
@@ -65,7 +65,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const result = await createProject(name, session.user.id, description)
+    const VALID_MODULES = ['analytics', 'vector', 'edge-functions', 'imgproxy', 'realtime']
+    const sanitizedModules = Array.isArray(disabledModules) 
+      ? disabledModules.filter((m: string) => VALID_MODULES.includes(m))
+      : []
+
+    const result = await createProject(name, session.user.id, description, sanitizedModules)
 
     if (!result.success) {
       return NextResponse.json(

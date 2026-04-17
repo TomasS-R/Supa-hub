@@ -24,6 +24,7 @@ export default function DashboardPage() {
   const [error, setError] = useState('')
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
   const [projectUrls, setProjectUrls] = useState<Record<string, string>>({})
+  const [projectDisabledModules, setProjectDisabledModules] = useState<string[]>([])
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [showUpdateModal, setShowUpdateModal] = useState(false)
@@ -163,6 +164,10 @@ export default function DashboardPage() {
         const data = await response.json()
         const envVars = data.envVars || {}
 
+        const disabledStr = envVars.DISABLED_MODULES || ''
+        const disabledVars = disabledStr ? disabledStr.split(',') : []
+        setProjectDisabledModules(disabledVars)
+
         // Extract URLs from environment variables
         const urls: Record<string, string> = {}
         const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
@@ -171,10 +176,10 @@ export default function DashboardPage() {
         if (envVars.KONG_HTTP_PORT) {
           urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
         }
-        if (envVars.STUDIO_PORT) {
+        if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
           urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
         }
-        if (envVars.ANALYTICS_PORT) {
+        if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
           urls['Analytics (Logflare)'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
         }
         if (envVars.POSTGRES_PORT) {
@@ -282,6 +287,7 @@ export default function DashboardPage() {
 
   const closeModal = () => {
     setSelectedProject(null)
+    setProjectDisabledModules([])
     setShowDeleteConfirm(false)
     setShowRestoreConfirm(false)
     setProjectUrls({})
@@ -471,6 +477,20 @@ export default function DashboardPage() {
               <div className="mb-6">
                 <h4 className="font-medium text-gray-900 dark:text-white mb-2">{selectedProject.name}</h4>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{selectedProject.description}</p>
+
+                {projectDisabledModules.length > 0 && (
+                  <div className="bg-green-500/10 border border-green-500/20 text-green-500 px-4 py-3 rounded text-sm mb-4">
+                    🌿 Lightweight Mode — {projectDisabledModules.length} modules disabled, 
+                    saving ~{(() => {
+                      let savings = 0;
+                      if (projectDisabledModules.includes('analytics') || projectDisabledModules.includes('vector')) savings += 1000;
+                      if (projectDisabledModules.includes('edge-functions')) savings += 150;
+                      if (projectDisabledModules.includes('imgproxy')) savings += 100;
+                      if (projectDisabledModules.includes('realtime')) savings += 200;
+                      return savings;
+                    })()} MB RAM
+                  </div>
+                )}
 
                 {/* Project URLs */}
                 <div className="space-y-2">
