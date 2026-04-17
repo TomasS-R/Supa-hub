@@ -21,6 +21,11 @@ BEGIN
     EXECUTE 'ALTER USER supabase_storage_admin WITH PASSWORD ''{{POSTGRES_PASSWORD}}''';
   END IF;
 
+  IF EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'supabase_functions_admin') THEN
+    RAISE NOTICE 'Setting password for supabase_functions_admin';
+    EXECUTE 'ALTER USER supabase_functions_admin WITH PASSWORD ''{{POSTGRES_PASSWORD}}''';
+  END IF;
+
   IF EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'authenticator') THEN
     RAISE NOTICE 'Setting password for authenticator';
     EXECUTE 'ALTER USER authenticator WITH PASSWORD ''{{POSTGRES_PASSWORD}}''';

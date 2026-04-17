@@ -540,12 +540,17 @@ export async function createProject(name: string, userId: string, description?: 
         }
       }
 
-      // 2. Update healthcheck retries to 30 to give heavy containers (e.g. analytics) more time to start
+      // 2. Update healthcheck retries to give massive patience to heavy containers (especially db on a VPS)
       if (line.includes('retries: 10')) {
-        updatedLine = line.replace('retries: 10', 'retries: 30')
+        updatedLine = line.replace('retries: 10', 'retries: 120') // Give ~10 mins to start 
       }
       if (line.includes('retries: 3')) {
-        updatedLine = line.replace('retries: 3', 'retries: 10')
+        updatedLine = line.replace('retries: 3', 'retries: 60')
+      }
+
+      // 2b. Crucial fix for Linux VPS where localhost resolves to ::1 (IPv6)
+      if (line.includes('"localhost"')) {
+        updatedLine = line.replace('"localhost"', '"127.0.0.1"')
       }
 
       // 3. Update the compose project name to be unique
@@ -564,7 +569,7 @@ export async function createProject(name: string, userId: string, description?: 
           inVolumes = true
         } else if (inVolumes && (line.match(/^    [a-z_]+:/) || (line.trim() === '' && i + 1 < lines.length && !lines[i + 1].trim().startsWith('-')))) {
           // We reached the end of volumes section (next key or empty line)
-          updatedLines.push('      - ./init-db.sql:/docker-entrypoint-initdb.d/99-supaconsole-init.sql:ro')
+          updatedLines.push('      - ./init-db.sql:/docker-entrypoint-initdb.d/migrations/999-supaconsole-init.sql:ro')
           inVolumes = false
         }
       }
@@ -719,6 +724,8 @@ export async function deployProject(projectId: string) {
         throw new Error(`Network connectivity issue: Unable to reach Docker registry.\n${errorMessage}`)
       } else if (errorMessage.includes('permission denied')) {
         throw new Error(`Docker permission denied. Please ensure your environment has privileges.\n${errorMessage}`)
+      } else if (errorMessage.includes('address already in use') || errorMessage.includes('port is already allocated') || errorMessage.includes('Ports are not available')) {
+        throw new Error(`Uno o más puertos asignados ya están en uso por otra aplicación. Por favor, elige otros puertos en la configuración e intenta nuevamente.\n${errorMessage}`)
       } else if (errorMessage.includes('dependency failed to start')) {
         throw new Error(`A critical Supabase container crashed during startup (likely Out of Memory on a VPS, or a configuration error). Check if your server has at least 4GB of RAM.\n${errorMessage}`)
       } else {
@@ -979,6 +986,11 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       /- 4000:4000/g,
       `- \${ANALYTICS_PORT}:4000`
     )
+
+    // Apply healthcheck safety patches for VPS stability
+    dockerComposeContent = dockerComposeContent.replace(/retries: 10/g, 'retries: 120')
+    dockerComposeContent = dockerComposeContent.replace(/retries: 3/g, 'retries: 60')
+    dockerComposeContent = dockerComposeContent.replace(/"localhost"/g, '"127.0.0.1"')
 
     await fs.writeFile(projectDockerComposePath, dockerComposeContent)
     console.log('docker-compose.yml restored')
@@ -1255,8 +1267,10 @@ export async function updateProjectToLatest(projectId: string) {
     if (await fs.access(coreDir).then(() => true).catch(() => false)) {
       console.log('Updating supabase-core reference...')
       try {
-        await execAsync('git fetch origin', { cwd: coreDir, timeout: 60000 })
-        await execAsync('git reset --hard origin/master', { cwd: coreDir, timeout: 60000 })
+        const version = process.env.SUPABASE_VERSION || 'v1.24.09'
+        // Fetch the specific version (tag or branch) with depth 1
+        await execAsync(`git fetch origin ${version} --depth 1`, { cwd: coreDir, timeout: 60000 })
+        await execAsync('git reset --hard FETCH_HEAD', { cwd: coreDir, timeout: 60000 })
         console.log('supabase-core updated')
       } catch {
         console.log('Could not update supabase-core (git error)')
@@ -1348,10 +1362,11 @@ export async function updateAllProjects(): Promise<UpdateAllProjectsResult> {
     const coreDir = path.join(process.cwd(), 'supabase-core')
     
     if (await fs.access(coreDir).then(() => true).catch(() => false)) {
-      console.log('Updating supabase-core to latest version...')
+      console.log(`Updating supabase-core to latest version...`)
       try {
-        await execAsync('git fetch origin', { cwd: coreDir, timeout: 60000 })
-        await execAsync('git reset --hard origin/master', { cwd: coreDir, timeout: 60000 })
+        const version = process.env.SUPABASE_VERSION || 'v1.24.09'
+        await execAsync(`git fetch origin ${version} --depth 1`, { cwd: coreDir, timeout: 60000 })
+        await execAsync('git reset --hard FETCH_HEAD', { cwd: coreDir, timeout: 60000 })
         console.log('supabase-core updated successfully')
       } catch (gitError) {
         console.warn('Could not update supabase-core (git error):', gitError)
