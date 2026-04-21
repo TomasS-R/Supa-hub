@@ -65,18 +65,36 @@ export default function DashboardPage() {
       const urls: Record<string, string> = {}
       const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
       const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
+      const isProduction = serverHost !== 'localhost' && serverHost !== '127.0.0.1'
+      const subdomain = serverHost.split('.')[0]
       
       if (envVars.KONG_HTTP_PORT) {
-        urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+        if (isProduction) {
+          urls['API Gateway'] = `${serverProtocol}//api.${subdomain}.${serverHost}`
+        } else {
+          urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+        }
       }
       if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-        urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+        if (isProduction) {
+          urls['Supabase Studio'] = `${serverProtocol}//studio.${subdomain}.${serverHost}`
+        } else {
+          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+        }
       }
       if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-        urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+        if (isProduction) {
+          urls['Analytics'] = `${serverProtocol}//analytics.${subdomain}.${serverHost}`
+        } else {
+          urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+        }
       }
       if (envVars.POSTGRES_PORT) {
-        urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
+        if (isProduction) {
+          urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${subdomain}.${serverHost}:5432/postgres`
+        } else {
+          urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
+        }
       }
       return urls
     } catch {
@@ -440,18 +458,36 @@ export default function DashboardPage() {
             const urls: Record<string, string> = {}
             const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
             const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
+            const isProduction = serverHost !== 'localhost' && serverHost !== '127.0.0.1'
+            const projSubdomain = serverHost.split('.')[0]
             
             if (envVars.KONG_HTTP_PORT) {
-              urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+              if (isProduction) {
+                urls['API Gateway'] = `${serverProtocol}//api.${projSubdomain}.${serverHost}`
+              } else {
+                urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+              }
             }
             if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-              urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+              if (isProduction) {
+                urls['Supabase Studio'] = `${serverProtocol}//studio.${projSubdomain}.${serverHost}`
+              } else {
+                urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+              }
             }
             if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-              urls['Analytics (Logflare)'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+              if (isProduction) {
+                urls['Analytics'] = `${serverProtocol}//analytics.${projSubdomain}.${serverHost}`
+              } else {
+                urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+              }
             }
             if (envVars.POSTGRES_PORT) {
-              urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
+              if (isProduction) {
+                urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${projSubdomain}.${serverHost}:5432/postgres`
+              } else {
+                urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
+              }
             }
 
             setProjectUrls(urls)
