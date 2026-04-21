@@ -65,15 +65,28 @@ export default function DashboardPage() {
       const urls: Record<string, string> = {}
       const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
       const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
+      const isLocal = serverHost === 'localhost' || serverHost === '127.0.0.1'
       
       if (slug && envVars.KONG_HTTP_PORT) {
-        urls['API Gateway'] = `${serverProtocol}//${serverHost}/proxy/${slug}/kong`
+        if (isLocal) {
+          urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+        } else {
+          urls['API Gateway'] = `${serverProtocol}//${serverHost}/proxy/${slug}/kong`
+        }
       }
-      if (slug && envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-        urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/proxy/${slug}/studio`
+      if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
+        if (isLocal) {
+          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+        } else {
+          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/proxy/${slug}/studio`
+        }
       }
-      if (slug && envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-        urls['Analytics'] = `${serverProtocol}//${serverHost}/proxy/${slug}/analytics`
+      if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
+        if (isLocal) {
+          urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+        } else {
+          urls['Analytics'] = `${serverProtocol}//${serverHost}/proxy/${slug}/analytics`
+        }
       }
       if (envVars.POSTGRES_PORT) {
         urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
@@ -440,15 +453,28 @@ export default function DashboardPage() {
             const urls: Record<string, string> = {}
             const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
             const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
+            const isLocal = serverHost === 'localhost' || serverHost === '127.0.0.1'
             
             if (selectedProject.slug && envVars.KONG_HTTP_PORT) {
-              urls['API Gateway'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/kong`
+              if (isLocal) {
+                urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+              } else {
+                urls['API Gateway'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/kong`
+              }
             }
-            if (selectedProject.slug && envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-              urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/studio`
+            if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
+              if (isLocal) {
+                urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+              } else {
+                urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/studio`
+              }
             }
-            if (selectedProject.slug && envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-              urls['Analytics'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/analytics`
+            if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
+              if (isLocal) {
+                urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+              } else {
+                urls['Analytics'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/analytics`
+              }
             }
             if (envVars.POSTGRES_PORT) {
               urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
