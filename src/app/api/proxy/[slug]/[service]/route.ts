@@ -102,7 +102,42 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
       )
     }
 
-    const targetUrl = `http://127.0.0.1:${targetPort}${request.nextUrl.pathname}${request.nextUrl.search}`
+    // Try multiple host addresses to reach services on the Docker host
+    const hostCandidates = [
+      process.env.DOCKER_HOST_IP,
+      'host.docker.internal',
+      '172.17.0.1',
+      '172.18.0.1',
+      '172.19.0.1',
+    ].filter(Boolean) as string[]
+
+    let finalUrl: string | null = null
+    let lastError: Error | null = null
+
+    for (const host of hostCandidates) {
+      const testUrl = `http://${host}:${targetPort}`
+      try {
+        const testResponse = await fetch(testUrl, { 
+          method: 'GET',
+          signal: AbortSignal.timeout(300)
+        })
+        finalUrl = testUrl
+        break
+      } catch (e) {
+        lastError = e as Error
+        continue
+      }
+    }
+
+    if (!finalUrl) {
+      console.error(`Cannot reach Docker host for proxy. Tried: ${hostCandidates.join(', ')}. Last error:`, lastError)
+      return NextResponse.json(
+        { error: `Cannot connect to ${service} service. Docker host unreachable.` },
+        { status: 502 }
+      )
+    }
+
+    const targetUrl = `${finalUrl}${request.nextUrl.pathname}${request.nextUrl.search}`
     
     let body: ReadableStream | null = null
     if (['POST', 'PUT', 'PATCH'].includes(request.method)) {

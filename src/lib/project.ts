@@ -577,7 +577,57 @@ export async function createProject(name: string, userId: string, description?: 
       updatedLines.push(updatedLine)
     }
 
-    await fs.writeFile(dockerComposeFile, updatedLines.join('\n'))
+    // Add dokploy-network to networks section if not present
+    let hasNetworks = updatedLines.some(l => l.trim() === 'networks:')
+    if (!hasNetworks) {
+      updatedLines.push('')
+      updatedLines.push('networks:')
+      updatedLines.push('  dokploy-network:')
+      updatedLines.push('    external: true')
+    }
+
+    // Add dokploy-network to each service that doesn't have networks defined
+    const finalLines3: string[] = []
+    for (let i = 0; i < updatedLines.length; i++) {
+      const line = updatedLines[i]
+      finalLines3.push(line)
+      
+      // If this is a service definition, check if it has networks and add if missing
+      const serviceDef = line.match(/^  ([a-z_]+):/)
+      if (serviceDef && !['networks', 'version', 'name'].includes(serviceDef[1])) {
+        // Look ahead to see if this service has networks defined
+        let hasServiceNetworks = false
+        for (let j = i + 1; j < Math.min(i + 50, updatedLines.length); j++) {
+          const nextLine = updatedLines[j]
+          if (nextLine.match(/^  [a-z_]+:/) && nextLine !== line) break
+          if (nextLine.includes('networks:')) {
+            hasServiceNetworks = true
+            break
+          }
+        }
+        if (!hasServiceNetworks) {
+          // Add networks at the end of this service block
+          let insertAt = finalLines3.length
+          for (let j = i + 1; j < updatedLines.length; j++) {
+            if (updatedLines[j].match(/^  [a-z_]+:/) && !updatedLines[j].includes('name:')) {
+              insertAt = finalLines3.length
+              // Back up to last non-empty line
+              while (insertAt > 0 && finalLines3[insertAt - 1].trim() === '') {
+                insertAt--
+              }
+              insertAt++
+              break
+            }
+            if (j === updatedLines.length - 1) {
+              insertAt = finalLines3.length
+            }
+          }
+          finalLines3.splice(insertAt, 0, '    networks:', '      - dokploy-network')
+        }
+      }
+    }
+
+    await fs.writeFile(dockerComposeFile, finalLines3.join('\n'))
     console.log('Docker Compose configuration updated safely')
 
     // Save environment variables to database
