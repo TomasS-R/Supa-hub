@@ -53,7 +53,7 @@ export default function DashboardPage() {
   const linksDropdownRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
 
-  const fetchProjectUrl = async (projectId: string): Promise<Record<string, string>> => {
+  const fetchProjectUrl = async (projectId: string, slug: string): Promise<Record<string, string>> => {
     try {
       const response = await fetch(`/api/projects/${projectId}/env`)
       if (!response.ok) return {}
@@ -66,14 +66,14 @@ export default function DashboardPage() {
       const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
       const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
       
-      if (envVars.KONG_HTTP_PORT) {
-        urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+      if (slug && envVars.KONG_HTTP_PORT) {
+        urls['API Gateway'] = `${serverProtocol}//${serverHost}/proxy/${slug}/kong`
       }
-      if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-        urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+      if (slug && envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
+        urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/proxy/${slug}/studio`
       }
-      if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-        urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+      if (slug && envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
+        urls['Analytics'] = `${serverProtocol}//${serverHost}/proxy/${slug}/analytics`
       }
       if (envVars.POSTGRES_PORT) {
         urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
@@ -96,7 +96,7 @@ export default function DashboardPage() {
           const urlsMap: Record<string, Record<string, string>> = {}
           await Promise.all(
             data.projects.map(async (project: Project) => {
-              const urls = await fetchProjectUrl(project.id)
+              const urls = await fetchProjectUrl(project.id, project.slug)
               if (Object.keys(urls).length > 0) {
                 urlsMap[project.id] = urls
               }
@@ -441,14 +441,14 @@ export default function DashboardPage() {
             const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
             const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
             
-            if (envVars.KONG_HTTP_PORT) {
-              urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+            if (selectedProject.slug && envVars.KONG_HTTP_PORT) {
+              urls['API Gateway'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/kong`
             }
-            if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-              urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+            if (selectedProject.slug && envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
+              urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/studio`
             }
-            if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-              urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+            if (selectedProject.slug && envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
+              urls['Analytics'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/analytics`
             }
             if (envVars.POSTGRES_PORT) {
               urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
