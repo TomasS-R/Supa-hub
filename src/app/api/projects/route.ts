@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { validateSession } from '@/lib/auth'
-import { createProject } from '@/lib/project'
+import { createProject, getProjectStatus } from '@/lib/project'
 
 export async function GET(request: NextRequest) {
   try {
@@ -27,7 +27,18 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json({ projects })
+    const projectsWithRealStatus = await Promise.all(
+      projects.map(async (project) => {
+        const dockerStatus = await getProjectStatus(project.slug)
+        return {
+          ...project,
+          status: dockerStatus.status !== 'not_found' ? dockerStatus.status : project.status,
+          dockerStatus
+        }
+      })
+    )
+
+    return NextResponse.json({ projects: projectsWithRealStatus })
   } catch (error) {
     console.error('Get projects error:', error)
     return NextResponse.json(

@@ -1,8 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
+import { toast } from 'vibe-toast'
+import { Play, Pause, Trash2, RotateCw, Settings, RefreshCw, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -23,8 +25,8 @@ export default function DashboardPage() {
   const [initProgress, setInitProgress] = useState('')
   const [error, setError] = useState('')
   const [selectedProject, setSelectedProject] = useState<Project | null>(null)
-  const [projectUrls, setProjectUrls] = useState<Record<string, string>>({})
   const [projectDisabledModules, setProjectDisabledModules] = useState<string[]>([])
+  const [projectUrls, setProjectUrls] = useState<Record<string, string>>({})
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [showUpdateModal, setShowUpdateModal] = useState(false)
@@ -44,7 +46,43 @@ export default function DashboardPage() {
     POSTGRES_PORT: '',
     POOLER_PROXY_PORT_TRANSACTION: ''
   })
+  const [inlineActionLoading, setInlineActionLoading] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [projectUrlsMap, setProjectUrlsMap] = useState<Record<string, Record<string, string>>>({})
+  const [openLinksDropdown, setOpenLinksDropdown] = useState<string | null>(null)
+  const linksDropdownRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
+
+  const fetchProjectUrl = async (projectId: string): Promise<Record<string, string>> => {
+    try {
+      const response = await fetch(`/api/projects/${projectId}/env`)
+      if (!response.ok) return {}
+      const data = await response.json()
+      const envVars = data.envVars || {}
+      const disabledStr = envVars.DISABLED_MODULES || ''
+      const disabledVars = disabledStr ? disabledStr.split(',') : []
+      
+      const urls: Record<string, string> = {}
+      const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+      const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
+      
+      if (envVars.KONG_HTTP_PORT) {
+        urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+      }
+      if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
+        urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+      }
+      if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
+        urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+      }
+      if (envVars.POSTGRES_PORT) {
+        urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
+      }
+      return urls
+    } catch {
+      return {}
+    }
+  }
 
   const fetchProjects = async () => {
     try {
@@ -54,6 +92,17 @@ export default function DashboardPage() {
         setProjects(data.projects)
         if (data.projects.length > 0) {
           setInitialized(true)
+          
+          const urlsMap: Record<string, Record<string, string>> = {}
+          await Promise.all(
+            data.projects.map(async (project: Project) => {
+              const urls = await fetchProjectUrl(project.id)
+              if (Object.keys(urls).length > 0) {
+                urlsMap[project.id] = urls
+              }
+            })
+          )
+          setProjectUrlsMap(urlsMap)
         }
       } else if (response.status === 401) {
         router.push('/auth/login')
@@ -85,14 +134,23 @@ export default function DashboardPage() {
         await new Promise(resolve => setTimeout(resolve, 1000))
         setInitialized(true)
         setInitProgress('')
+        toast.success('Initialization complete!', {
+          description: 'Supabase repository cloned successfully.',
+        })
       } else {
         const data = await response.json()
         setError(data.error || 'Initialization failed')
         setInitProgress('')
+        toast.error('Initialization failed', {
+          description: data.error || 'Something went wrong',
+        })
       }
     } catch {
       setError('An error occurred during initialization')
       setInitProgress('')
+      toast.error('Error', {
+        description: 'An error occurred during initialization',
+      })
     } finally {
       setInitializing(false)
     }
@@ -128,6 +186,15 @@ export default function DashboardPage() {
           updated: data.updated || [],
           failed: data.failed || []
         })
+        if (data.success) {
+          toast.success('Update complete', {
+            description: `${data.updated?.length || 0} projects updated successfully.`,
+          })
+        } else {
+          toast.error('Update failed', {
+            description: 'Unable to update projects.',
+          })
+        }
       } else {
         const data = await response.json()
         setUpdateResult({
@@ -136,6 +203,9 @@ export default function DashboardPage() {
           failed: [],
         })
         console.error('Update failed:', data.error)
+        toast.error('Update failed', {
+          description: data.error || 'Something went wrong',
+        })
       }
     } catch (error) {
       console.error('Update all projects error:', error)
@@ -143,6 +213,9 @@ export default function DashboardPage() {
         success: false,
         updated: [],
         failed: [],
+      })
+      toast.error('Error', {
+        description: 'Failed to update projects',
       })
     } finally {
       setUpdating(false)
@@ -152,45 +225,6 @@ export default function DashboardPage() {
   const closeUpdateModal = () => {
     setShowUpdateModal(false)
     setUpdateResult(null)
-  }
-
-  const handleManageProject = async (project: Project) => {
-    setSelectedProject(project)
-
-    // Fetch project URLs from environment variables
-    try {
-      const response = await fetch(`/api/projects/${project.id}/env`)
-      if (response.ok) {
-        const data = await response.json()
-        const envVars = data.envVars || {}
-
-        const disabledStr = envVars.DISABLED_MODULES || ''
-        const disabledVars = disabledStr ? disabledStr.split(',') : []
-        setProjectDisabledModules(disabledVars)
-
-        // Extract URLs from environment variables
-        const urls: Record<string, string> = {}
-        const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
-        const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
-        
-        if (envVars.KONG_HTTP_PORT) {
-          urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
-        }
-        if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
-        }
-        if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-          urls['Analytics (Logflare)'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
-        }
-        if (envVars.POSTGRES_PORT) {
-          urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
-        }
-
-        setProjectUrls(urls)
-      }
-    } catch (error) {
-      console.error('Failed to fetch project URLs:', error)
-    }
   }
 
   const handleDeleteProject = async () => {
@@ -203,17 +237,25 @@ export default function DashboardPage() {
       })
 
       if (response.ok) {
-        // Remove project from local state
         setProjects(prev => prev.filter(p => p.id !== selectedProject.id))
         setSelectedProject(null)
         setShowDeleteConfirm(false)
+        toast.success('Project deleted', {
+          description: `${selectedProject.name} has been removed.`,
+        })
       } else {
         const data = await response.json()
         setError(data.error || 'Failed to delete project')
+        toast.error('Failed to delete', {
+          description: data.error || 'Something went wrong',
+        })
       }
     } catch (error) {
       setError('Failed to delete project')
       console.error('Delete project error:', error)
+      toast.error('Error', {
+        description: 'Failed to delete project',
+      })
     } finally {
       setDeleting(false)
     }
@@ -263,11 +305,12 @@ export default function DashboardPage() {
           message: data.message || 'Project restored successfully', 
           newPorts: data.newPorts 
         })
+        toast.success('Project restored', {
+          description: data.message || 'Docker containers have been recreated.',
+        })
       } else {
-        // Parse error for better user message
         let errorMsg = data.error || 'Failed to restore project'
         
-        // Check if it's a port error
         if (errorMsg.includes('ports are not available') || errorMsg.includes('bind')) {
           const portMatch = errorMsg.match(/(\d+):\s*bind/)
           if (portMatch) {
@@ -276,21 +319,96 @@ export default function DashboardPage() {
         }
         
         setRestoreError(errorMsg)
+        toast.error('Restore failed', {
+          description: errorMsg.replace(/\n/g, ' '),
+        })
       }
     } catch (error) {
       setRestoreError('Failed to restore project. Please try again.')
       console.error('Restore project error:', error)
+      toast.error('Error', {
+        description: 'Failed to restore project',
+      })
     } finally {
       setRestoring(false)
     }
   }
 
+  const handleInlinePause = async (project: Project) => {
+    setInlineActionLoading(project.id)
+    try {
+      const response = await fetch(`/api/projects/${project.id}/pause`, { method: 'POST' })
+      if (response.ok) {
+        toast.success('Project paused', { description: `${project.name} has been paused.` })
+        await fetchProjects()
+      } else {
+        const data = await response.json()
+        toast.error('Failed to pause', { description: data.error })
+      }
+    } catch {
+      toast.error('Error', { description: 'Failed to pause project' })
+    } finally {
+      setInlineActionLoading(null)
+    }
+  }
+
+  const handleInlineDeploy = async (project: Project) => {
+    setInlineActionLoading(project.id)
+    try {
+      const response = await fetch(`/api/projects/${project.id}/deploy`, { method: 'POST' })
+      if (response.ok) {
+        toast.success('Project deploying', { description: `${project.name} is starting up...` })
+        await fetchProjects()
+      } else {
+        const data = await response.json()
+        toast.error('Failed to deploy', { description: data.error })
+      }
+    } catch {
+      toast.error('Error', { description: 'Failed to deploy project' })
+    } finally {
+      setInlineActionLoading(null)
+    }
+  }
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    await fetchProjects()
+    setRefreshing(false)
+  }
+
+  const handleCopyUrl = async (url: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success('Copied!', {
+        description: `${label} copied to clipboard.`,
+      })
+    } catch {
+      toast.error('Failed to copy', {
+        description: 'Unable to copy to clipboard.',
+      })
+    }
+  }
+
+  const toggleLinksDropdown = (projectId: string) => {
+    setOpenLinksDropdown(openLinksDropdown === projectId ? null : projectId)
+  }
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (linksDropdownRef.current && !linksDropdownRef.current.contains(event.target as Node)) {
+        setOpenLinksDropdown(null)
+      }
+    }
+    if (openLinksDropdown) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [openLinksDropdown])
+
   const closeModal = () => {
     setSelectedProject(null)
-    setProjectDisabledModules([])
     setShowDeleteConfirm(false)
     setShowRestoreConfirm(false)
-    setProjectUrls({})
     setRestoreError('')
     setRestoreSuccess(null)
     setRestoreWithNewPorts(false)
@@ -305,6 +423,46 @@ export default function DashboardPage() {
     fetchProjects()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (selectedProject) {
+      const fetchProjectInfo = async () => {
+        try {
+          const response = await fetch(`/api/projects/${selectedProject.id}/env`)
+          if (response.ok) {
+            const data = await response.json()
+            const envVars = data.envVars || {}
+
+            const disabledStr = envVars.DISABLED_MODULES || ''
+            const disabledVars = disabledStr ? disabledStr.split(',') : []
+            setProjectDisabledModules(disabledVars)
+
+            const urls: Record<string, string> = {}
+            const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+            const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
+            
+            if (envVars.KONG_HTTP_PORT) {
+              urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
+            }
+            if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
+              urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
+            }
+            if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
+              urls['Analytics (Logflare)'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
+            }
+            if (envVars.POSTGRES_PORT) {
+              urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
+            }
+
+            setProjectUrls(urls)
+          }
+        } catch (error) {
+          console.error('Failed to fetch project info:', error)
+        }
+      }
+      fetchProjectInfo()
+    }
+  }, [selectedProject])
 
   if (loading) {
     return (
@@ -393,12 +551,18 @@ export default function DashboardPage() {
                 New Project
               </Button>
               {projects.length > 0 && (
-                <Button variant="outline" onClick={handleUpdateAll}>
-                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Update All
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
+                    <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+                    {refreshing ? 'Refreshing...' : 'Refresh'}
+                  </Button>
+                  <Button variant="outline" onClick={handleUpdateAll}>
+                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Update All
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -419,38 +583,193 @@ export default function DashboardPage() {
               </Card>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {projects.map((project) => (
-                  <Card key={project.id} className="hover:shadow-lg transition-shadow">
-                    <CardHeader>
-                      <div className="flex justify-between items-start">
-                        <CardTitle className="text-lg">{project.name}</CardTitle>
-                        <div className={`px-2 py-1 rounded-full text-xs ${project.status === 'active' ? 'bg-green-100 text-green-800' :
-                            project.status === 'paused' ? 'bg-yellow-100 text-yellow-800' :
-                              'bg-gray-100 text-gray-800'
-                          }`}>
-                          {project.status}
+                {projects.map((project) => {
+                  const isRunning = project.status === 'active' || project.status === 'partially_running'
+                  const isPaused = project.status === 'paused' || project.status === 'not_found'
+                  
+                  return (
+                    <Card 
+                      key={project.id} 
+                      className="group hover:shadow-lg transition-shadow"
+                    >
+                      <CardHeader className="pb-3">
+                        <div className="flex justify-between items-start">
+                          <a
+                            href={projectUrlsMap[project.id] && Object.keys(projectUrlsMap[project.id]).length > 0 ? Object.values(projectUrlsMap[project.id])[0] : '#'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`text-lg font-semibold hover:underline flex items-center gap-1.5 ${projectUrlsMap[project.id] && Object.keys(projectUrlsMap[project.id]).length > 0 ? '' : ''}`}
+                            onClick={(e) => {
+                              if (!projectUrlsMap[project.id]) e.preventDefault()
+                            }}
+                          >
+                            {project.name}
+                            {projectUrlsMap[project.id] && Object.keys(projectUrlsMap[project.id]).length > 0 && (
+                              <ExternalLink className="w-3.5 h-3.5 text-muted-foreground mt-0.5 flex-shrink-0" />
+                            )}
+                          </a>
+                          
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <div className={`px-2 py-1 rounded-full text-xs ${project.status === 'active' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' :
+                                project.status === 'paused' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' :
+                                project.status === 'partially_running' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400' :
+                                project.status === 'error' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' :
+                                project.status === 'created' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' :
+                                'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                              }`}>
+                              {project.status === 'partially_running' ? 'Partially Running' :
+                               project.status === 'not_found' ? 'Not Setup' :
+                               project.status.charAt(0).toUpperCase() + project.status.slice(1).replace('_', ' ')}
+                            </div>
+                            
+                            {projectUrlsMap[project.id] && Object.keys(projectUrlsMap[project.id]).length > 0 && (
+                              <div ref={linksDropdownRef} className="relative flex-shrink-0">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 hover:bg-accent"
+                                  onClick={() => toggleLinksDropdown(project.id)}
+                                >
+                                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </Button>
+                                {openLinksDropdown === project.id && (
+                                  <div className="absolute right-0 top-9 z-50 w-64 bg-background border rounded-lg shadow-xl animate-in fade-in zoom-in-95 duration-100">
+                                    <div className="p-1">
+                                      <div className="px-3 py-2 border-b text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                                        Quick Links
+                                      </div>
+                                      {Object.entries(projectUrlsMap[project.id]).map(([name, url]) => (
+                                        <div
+                                          key={name}
+                                          className="flex items-center justify-between gap-2 px-2 py-1.5 hover:bg-accent rounded-md group/link"
+                                        >
+                                          <a
+                                            href={url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex-1 min-w-0 text-sm truncate hover:underline text-left"
+                                          >
+                                            {name}
+                                          </a>
+                                          <div className="flex items-center gap-0.5 opacity-0 group-hover/link:opacity-100 flex-shrink-0">
+                                            <button
+                                              onClick={(e) => {
+                                                e.preventDefault()
+                                                e.stopPropagation()
+                                                handleCopyUrl(url, name)
+                                              }}
+                                              className="p-1 rounded hover:bg-muted/80 transition-colors"
+                                              title="Copy URL"
+                                            >
+                                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                              </svg>
+                                            </button>
+                                            <a
+                                              href={url}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              onClick={(e) => e.stopPropagation()}
+                                              className="p-1 rounded hover:bg-muted/80 transition-colors"
+                                              title="Open in new tab"
+                                            >
+                                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                              </svg>
+                                            </a>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      {project.description && (
-                        <CardDescription>{project.description}</CardDescription>
-                      )}
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm text-muted-foreground">
-                          {project.slug}
-                        </span>
-                        <Button variant="outline" size="sm" onClick={() => handleManageProject(project)}>
-                          <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
-                          Manage
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                        {project.description && (
+                          <CardDescription>{project.description}</CardDescription>
+                        )}
+                      </CardHeader>
+                      <CardContent>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-muted-foreground">
+                            {project.slug}
+                          </span>
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 hover:bg-accent"
+                              onClick={(e) => { e.stopPropagation(); router.push(`/dashboard/projects/${project.id}/configure`) }}
+                              title="Configure"
+                            >
+                              <Settings className="h-3.5 w-3.5" />
+                            </Button>
+                            
+                            {isPaused && !isRunning && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 hover:bg-green-500/10 hover:text-green-600 dark:hover:text-green-400"
+                                onClick={(e) => { e.stopPropagation(); handleInlineDeploy(project) }}
+                                disabled={inlineActionLoading === project.id}
+                                title="Deploy"
+                              >
+                                {inlineActionLoading === project.id ? (
+                                  <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                  <Play className="h-3.5 w-3.5" />
+                                )}
+                              </Button>
+                            )}
+                            
+                            {isRunning && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 hover:bg-yellow-500/10 hover:text-yellow-600 dark:hover:text-yellow-400"
+                                onClick={(e) => { e.stopPropagation(); handleInlinePause(project) }}
+                                disabled={inlineActionLoading === project.id}
+                                title="Pause"
+                              >
+                                {inlineActionLoading === project.id ? (
+                                  <div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                  <Pause className="h-3.5 w-3.5" />
+                                )}
+                              </Button>
+                            )}
+                            
+                            {(project.status === 'error' || project.status === 'created') && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400"
+                                onClick={(e) => { e.stopPropagation(); setSelectedProject(project); setShowRestoreConfirm(true) }}
+                                title="Restore"
+                              >
+                                <RotateCw className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
+                              onClick={(e) => { e.stopPropagation(); setSelectedProject(project); setShowDeleteConfirm(true) }}
+                              title="Delete"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )
+                })}
               </div>
             )}
           </div>

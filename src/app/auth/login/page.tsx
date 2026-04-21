@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { toast } from 'vibe-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -40,13 +41,22 @@ export default function LoginPage() {
       })
 
       if (response.ok) {
+        toast.success('Login successful!', {
+          description: 'Redirecting to dashboard...',
+        })
         router.push('/dashboard')
       } else {
         const data = await response.json()
         setError(data.error || 'Login failed')
+        toast.error('Login failed', {
+          description: data.error || 'Invalid credentials',
+        })
       }
     } catch {
       setError('An error occurred. Please try again.')
+      toast.error('Error', {
+        description: 'An error occurred. Please try again.',
+      })
     } finally {
       setLoading(false)
     }

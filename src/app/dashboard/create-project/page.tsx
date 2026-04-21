@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
+import { toast } from 'vibe-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -85,14 +86,22 @@ export default function CreateProjectPage() {
 
       if (response.ok) {
         const data = await response.json()
-        // Redirect to project configuration page
+        toast.success('Project created!', {
+          description: `Setting up ${name.trim()}...`,
+        })
         router.push(`/dashboard/projects/${data.project.id}/configure`)
       } else {
         const data = await response.json()
         setError(data.error || 'Failed to create project')
+        toast.error('Failed to create project', {
+          description: data.error || 'Something went wrong',
+        })
       }
     } catch {
       setError('An error occurred. Please try again.')
+      toast.error('Error', {
+        description: 'An error occurred. Please try again.',
+      })
     } finally {
       setLoading(false)
     }

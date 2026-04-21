@@ -653,6 +653,71 @@ export async function updateProjectEnvVars(projectId: string, envVars: Record<st
   }
 }
 
+export async function getProjectStatus(slug: string) {
+  try {
+    const projectDir = path.join(process.cwd(), 'supabase-projects', slug, 'docker')
+    
+    const dockerExists = await fs.access(projectDir)
+      .then(() => true)
+      .catch(() => false)
+
+    if (!dockerExists) {
+      return { status: 'not_found', containers: [] }
+    }
+
+    const { stdout } = await execAsync('docker compose ps --format json', {
+      cwd: projectDir,
+      maxBuffer: 1024 * 1024 * 2
+    })
+
+    const lines = stdout.trim().split('\n').filter(Boolean)
+    if (lines.length === 0) {
+      return { status: 'not_found', containers: [] }
+    }
+
+    const containers = JSON.parse(`[${lines.join(',')}]`)
+    
+    if (!Array.isArray(containers) || containers.length === 0) {
+      return { status: 'not_found', containers: [] }
+    }
+
+    const containerInfo = containers.map((c: any) => ({
+      name: c.Name || c.name || 'unknown',
+      state: (c.State || c.state || '').toLowerCase(),
+      health: (c.Health || c.health || null),
+      ports: (c.Ports || c.ports || ''),
+      localStatus: (c.State || c.state || '').toLowerCase()
+    }))
+
+    const runningCount = containerInfo.filter((c: any) => 
+      c.localStatus === 'running'
+    ).length
+    const pausedCount = containerInfo.filter((c: any) => 
+      c.localStatus === 'exited' || c.localStatus === 'stopped' || c.localStatus === 'paused'
+    ).length
+    const errorCount = containerInfo.filter((c: any) => 
+      c.localStatus === 'unhealthy' || c.localStatus === 'restarting' || c.localStatus === 'dead' || c.localStatus === 'crashed'
+    ).length
+
+    let realStatus = 'active'
+    if (errorCount > 0) {
+      realStatus = 'error'
+    } else if (runningCount === containerInfo.length) {
+      realStatus = 'active'
+    } else if (runningCount > 0) {
+      realStatus = 'partially_running'
+    } else if (pausedCount === containerInfo.length) {
+      realStatus = 'paused'
+    } else if (containerInfo.every((c: any) => c.localStatus === 'created')) {
+      realStatus = 'created'
+    }
+
+    return { status: realStatus, containers: containerInfo }
+  } catch {
+    return { status: 'not_found', containers: [] }
+  }
+}
+
 export async function deployProject(projectId: string) {
   try {
     const project = await prisma.project.findUnique({

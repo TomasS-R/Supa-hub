@@ -1,21 +1,21 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
+import { toast } from 'vibe-toast'
+import { Copy } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-interface ConfigureProjectPageProps {
-  params: Promise<{
-    id: string
-  }>
-}
-
-export default function ConfigureProjectPage({ params }: ConfigureProjectPageProps) {
+export default function ConfigureProjectPage() {
+  const params = useParams()
+  const projectIdFromParams = params.id as string
+  const router = useRouter()
+  
   const [envVars, setEnvVars] = useState({
     // Secrets
     POSTGRES_PASSWORD: 'your-super-secret-and-long-postgres-password',
@@ -105,7 +105,6 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
   const [deploying, setDeploying] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const [projectId, setProjectId] = useState<string>('')
   const [systemChecks, setSystemChecks] = useState<{
     docker: boolean;
     dockerCompose: boolean;
@@ -114,19 +113,12 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
   } | null>(null)
   const [checkingSystem, setCheckingSystem] = useState(false)
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({})
-  const router = useRouter()
 
+  // Load existing environment variables
   useEffect(() => {
-    params.then(({ id }) => setProjectId(id))
-  }, [params])
-
-  // Load existing environment variables when projectId is available
-  useEffect(() => {
-    if (!projectId) return
-
     const loadEnvVars = async () => {
       try {
-        const response = await fetch(`/api/projects/${projectId}/env`)
+        const response = await fetch(`/api/projects/${projectIdFromParams}/env`)
         if (response.ok) {
           const data = await response.json()
           if (data.envVars && Object.keys(data.envVars).length > 0) {
@@ -143,7 +135,7 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
     }
 
     loadEnvVars()
-  }, [projectId])
+  }, [projectIdFromParams])
 
   const generateSecureKey = (length: number = 32) => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
@@ -202,6 +194,13 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
     }))
   }
 
+  const handleCopy = (text: string, label: string) => {
+    navigator.clipboard.writeText(text)
+    toast.success('Copied!', {
+      description: `${label} copied to clipboard.`,
+    })
+  }
+
   const handleSystemCheck = async () => {
     setCheckingSystem(true)
     setError('')
@@ -227,7 +226,7 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
     setSuccess('')
 
     try {
-      const response = await fetch(`/api/projects/${projectId}/env`, {
+      const response = await fetch(`/api/projects/${projectIdFromParams}/env`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -237,12 +236,21 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
 
       if (response.ok) {
         setSuccess('Configuration saved successfully!')
+        toast.success('Configuration saved!', {
+          description: 'Your environment variables have been saved.',
+        })
       } else {
         const data = await response.json()
         setError(data.error || 'Failed to save configuration')
+        toast.error('Save failed', {
+          description: data.error || 'Something went wrong',
+        })
       }
     } catch {
       setError('An error occurred. Please try again.')
+      toast.error('Error', {
+        description: 'An error occurred. Please try again.',
+      })
     } finally {
       setLoading(false)
     }
@@ -253,21 +261,30 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
     setError('')
 
     try {
-      const response = await fetch(`/api/projects/${projectId}/deploy`, {
+      const response = await fetch(`/api/projects/${projectIdFromParams}/deploy`, {
         method: 'POST',
       })
 
       if (response.ok) {
         setSuccess('Project deployed successfully!')
+        toast.success('Project deployed!', {
+          description: 'Docker containers are starting up...',
+        })
         setTimeout(() => {
           router.push('/dashboard')
         }, 2000)
       } else {
         const data = await response.json()
         setError(data.error || 'Failed to deploy project')
+        toast.error('Deployment failed', {
+          description: data.error || 'Something went wrong',
+        })
       }
     } catch {
       setError('An error occurred during deployment.')
+      toast.error('Error', {
+        description: 'An error occurred during deployment.',
+      })
     } finally {
       setDeploying(false)
     }
@@ -606,11 +623,9 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => {
-                          navigator.clipboard.writeText(envVars.POOLER_TENANT_ID)
-                        }}
+                        onClick={() => handleCopy(envVars.POOLER_TENANT_ID, 'Pooler Tenant ID')}
                       >
-                        Copy
+                        <Copy className="w-4 h-4" />
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
@@ -633,11 +648,9 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => {
-                          navigator.clipboard.writeText(envVars.POOLER_PROXY_PORT_TRANSACTION)
-                        }}
+                        onClick={() => handleCopy(String(envVars.POOLER_PROXY_PORT_TRANSACTION), 'Pooler Proxy Port')}
                       >
-                        Copy
+                        <Copy className="w-4 h-4" />
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
@@ -657,11 +670,9 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => {
-                          navigator.clipboard.writeText(`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@127.0.0.1:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB}`)
-                        }}
+                        onClick={() => handleCopy(`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@127.0.0.1:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB}`, 'Database URL')}
                       >
-                        Copy
+                        <Copy className="w-4 h-4" />
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
@@ -681,11 +692,9 @@ export default function ConfigureProjectPage({ params }: ConfigureProjectPagePro
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => {
-                          navigator.clipboard.writeText(envVars.SUPABASE_PUBLIC_URL)
-                        }}
+                        onClick={() => handleCopy(envVars.SUPABASE_PUBLIC_URL, 'Supabase URL')}
                       >
-                        Copy
+                        <Copy className="w-4 h-4" />
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">

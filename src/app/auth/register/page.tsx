@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
+import { toast } from 'vibe-toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -65,13 +66,22 @@ export default function RegisterPage() {
       })
 
       if (response.ok) {
+        toast.success('Account created!', {
+          description: 'Redirecting to dashboard...',
+        })
         router.push('/dashboard')
       } else {
         const data = await response.json()
         setError(data.error || 'Registration failed')
+        toast.error('Registration failed', {
+          description: data.error || 'Something went wrong',
+        })
       }
     } catch {
       setError('An error occurred. Please try again.')
+      toast.error('Error', {
+        description: 'An error occurred. Please try again.',
+      })
     } finally {
       setLoading(false)
     }
