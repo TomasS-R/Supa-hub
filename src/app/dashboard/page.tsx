@@ -53,6 +53,7 @@ export default function DashboardPage() {
   const [projectUrlsMap, setProjectUrlsMap] = useState<Record<string, Record<string, string>>>({})
   const [openLinksDropdown, setOpenLinksDropdown] = useState<string | null>(null)
   const linksDropdownRef = useRef<HTMLDivElement>(null)
+  const pollingRef = useRef<Set<string>>(new Set())
   const router = useRouter()
 
   const fetchProjectUrl = async (projectId: string, slug: string): Promise<Record<string, string>> => {
@@ -66,29 +67,17 @@ export default function DashboardPage() {
       
       const urls: Record<string, string> = {}
       const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
-      const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
-      const isLocal = serverHost === 'localhost' || serverHost === '127.0.0.1'
       
+      // Always use direct hostname:PORT access — ports are exposed on the Docker host
+      // and accessible via the VPS IP (Traefik DNS resolves to it)
       if (slug && envVars.KONG_HTTP_PORT) {
-        if (isLocal) {
-          urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
-        } else {
-          urls['API Gateway'] = `${serverProtocol}//${serverHost}/api/proxy/${slug}/kong`
-        }
+        urls['API Gateway'] = `http://${serverHost}:${envVars.KONG_HTTP_PORT}`
       }
       if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-        if (isLocal) {
-          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
-        } else {
-          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/api/proxy/${slug}/studio`
-        }
+        urls['Supabase Studio'] = `http://${serverHost}:${envVars.STUDIO_PORT}`
       }
       if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-        if (isLocal) {
-          urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
-        } else {
-          urls['Analytics'] = `${serverProtocol}//${serverHost}/api/proxy/${slug}/analytics`
-        }
+        urls['Analytics'] = `http://${serverHost}:${envVars.ANALYTICS_PORT}`
       }
       if (envVars.POSTGRES_PORT) {
         urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
@@ -388,23 +377,37 @@ export default function DashboardPage() {
   }
 
   const pollDeployStatus = (projectId: string) => {
+    // Prevent duplicate polling for the same project
+    if (pollingRef.current.has(projectId)) return
+    pollingRef.current.add(projectId)
+
     const interval = setInterval(async () => {
       try {
         const response = await fetch(`/api/projects/${projectId}/deploy-status`)
         if (!response.ok) {
           clearInterval(interval)
+          pollingRef.current.delete(projectId)
           return
         }
         const data = await response.json()
         
         if (data.deployStatus === 'done') {
           clearInterval(interval)
+          pollingRef.current.delete(projectId)
           toast.success('Deployment complete', { description: data.deployLog || 'All containers are running.' })
           await fetchProjects()
         } else if (data.deployStatus === 'failed') {
           clearInterval(interval)
+          pollingRef.current.delete(projectId)
           toast.error('Deployment failed', { description: data.deployLog || 'Check server logs for details.' })
           await fetchProjects()
+        } else {
+          // Update the project status in-place for live UI feedback
+          setProjects(prev => prev.map(p => 
+            p.id === projectId 
+              ? { ...p, status: 'deploying', deployStatus: data.deployStatus, deployLog: data.deployLog }
+              : p
+          ))
         }
         // For 'pulling' and 'starting' — continue polling
       } catch {
@@ -470,6 +473,16 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Auto-start polling for any projects that are currently deploying
+  // (handles page refresh mid-deploy and initial load)
+  useEffect(() => {
+    const deployingProjects = projects.filter(p => p.status === 'deploying' || p.deployStatus === 'pulling' || p.deployStatus === 'starting')
+    deployingProjects.forEach(p => {
+      pollDeployStatus(p.id)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects.length]) // Re-check when project count changes
+
   useEffect(() => {
     if (selectedProject) {
       const fetchProjectInfo = async () => {
@@ -485,29 +498,16 @@ export default function DashboardPage() {
 
             const urls: Record<string, string> = {}
             const serverHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
-            const serverProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:'
-            const isLocal = serverHost === 'localhost' || serverHost === '127.0.0.1'
             
+            // Always use direct hostname:PORT access
             if (selectedProject.slug && envVars.KONG_HTTP_PORT) {
-              if (isLocal) {
-                urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
-              } else {
-                urls['API Gateway'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/kong`
-              }
+              urls['API Gateway'] = `http://${serverHost}:${envVars.KONG_HTTP_PORT}`
             }
             if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
-              if (isLocal) {
-                urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
-              } else {
-                urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/studio`
-              }
+              urls['Supabase Studio'] = `http://${serverHost}:${envVars.STUDIO_PORT}`
             }
             if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
-              if (isLocal) {
-                urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
-              } else {
-                urls['Analytics'] = `${serverProtocol}//${serverHost}/proxy/${selectedProject.slug}/analytics`
-              }
+              urls['Analytics'] = `http://${serverHost}:${envVars.ANALYTICS_PORT}`
             }
             if (envVars.POSTGRES_PORT) {
               urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
@@ -877,20 +877,39 @@ export default function DashboardPage() {
                 <div className="space-y-2">
                   <h5 className="text-sm font-medium text-gray-700 dark:text-gray-300">Service URLs:</h5>
                   {Object.entries(projectUrls).map(([name, url]) => (
-                    <div key={name} className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">{name}:</span>
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-mono truncate max-w-xs"
-                        title={url}
-                      >
-                        {url}
-                        <svg className="w-3 h-3 inline ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
-                      </a>
+                    <div key={name} className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded gap-2">
+                      <span className="text-sm text-gray-600 dark:text-gray-400 flex-shrink-0">{name}:</span>
+                      <div className="flex items-center gap-1 min-w-0">
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-mono truncate"
+                          title={url}
+                        >
+                          {url}
+                        </a>
+                        <button
+                          onClick={() => handleCopyUrl(url, name)}
+                          className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex-shrink-0"
+                          title="Copy to clipboard"
+                        >
+                          <svg className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </button>
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex-shrink-0"
+                          title="Open in new tab"
+                        >
+                          <svg className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      </div>
                     </div>
                   ))}
                   {Object.keys(projectUrls).length === 0 && (
