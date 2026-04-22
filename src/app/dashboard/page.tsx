@@ -427,7 +427,20 @@ export default function DashboardPage() {
 
   const handleCopyUrl = async (url: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(url)
+      // navigator.clipboard only works on HTTPS or localhost
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url)
+      } else {
+        // Fallback for HTTP: use a temporary textarea
+        const textarea = document.createElement('textarea')
+        textarea.value = url
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
       toast.success('Copied!', {
         description: `${label} copied to clipboard.`,
       })

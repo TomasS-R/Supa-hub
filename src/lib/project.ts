@@ -337,12 +337,13 @@ export async function createProject(name: string, userId: string, description?: 
     // Fix line endings in kong-entrypoint.sh (convert CRLF to LF for bash/sh compatibility)
     const kongScriptPath = path.join(projectDir, 'docker', 'volumes', 'api', 'kong-entrypoint.sh')
     try {
+      await fs.access(kongScriptPath)
       const kongContent = await fs.readFile(kongScriptPath, 'utf8')
       const fixedKongContent = kongContent.replace(/\r\n/g, '\n')
       await fs.writeFile(kongScriptPath, fixedKongContent, 'utf8')
       console.log('Fixed line endings in kong-entrypoint.sh')
-    } catch (kongError) {
-      console.warn('Could not fix kong-entrypoint.sh line endings:', kongError)
+    } catch {
+      // File may not exist in Eco/pruned mode — this is normal
     }
 
     // Customize docker-compose.yml with unique container names and project-specific settings
@@ -734,23 +735,25 @@ export async function getProjectStatus(slug: string) {
     const containerInfo = containers.map((c: any) => ({
       name: c.Name || c.name || 'unknown',
       state: (c.State || c.state || '').toLowerCase(),
-      health: (c.Health || c.health || null),
+      health: (c.Health || c.health || '').toLowerCase(),
       ports: (c.Ports || c.ports || ''),
-      localStatus: (c.State || c.state || '').toLowerCase()
     }))
 
+    // Count container states — a container is "running" if State=running, regardless of healthcheck
+    // Healthchecks can take several minutes to pass after startup, so "starting" health is normal
     const runningCount = containerInfo.filter((c: any) => 
-      c.localStatus === 'running'
+      c.state === 'running'
     ).length
     const pausedCount = containerInfo.filter((c: any) => 
-      c.localStatus === 'exited' || c.localStatus === 'stopped' || c.localStatus === 'paused'
+      c.state === 'exited' || c.state === 'stopped' || c.state === 'paused'
     ).length
-    const errorCount = containerInfo.filter((c: any) => 
-      c.localStatus === 'unhealthy' || c.localStatus === 'restarting' || c.localStatus === 'dead' || c.localStatus === 'crashed'
+    // Only count truly broken containers (dead, restarting loops)
+    const deadCount = containerInfo.filter((c: any) => 
+      c.state === 'dead' || c.state === 'restarting'
     ).length
 
     let realStatus = 'active'
-    if (errorCount > 0) {
+    if (deadCount > 0) {
       realStatus = 'error'
     } else if (runningCount === containerInfo.length) {
       realStatus = 'active'
@@ -758,7 +761,7 @@ export async function getProjectStatus(slug: string) {
       realStatus = 'partially_running'
     } else if (pausedCount === containerInfo.length) {
       realStatus = 'paused'
-    } else if (containerInfo.every((c: any) => c.localStatus === 'created')) {
+    } else if (containerInfo.every((c: any) => c.state === 'created')) {
       realStatus = 'created'
     }
 
