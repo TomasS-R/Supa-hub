@@ -715,7 +715,7 @@ export async function getProjectStatus(slug: string) {
       return { status: 'not_found', containers: [] }
     }
 
-    const { stdout } = await execAsync('docker compose ps --format json', {
+    const { stdout } = await execAsync(`docker compose -p ${slug} ps --format json`, {
       cwd: projectDir,
       maxBuffer: 1024 * 1024 * 2
     })
@@ -812,7 +812,7 @@ export async function deployProject(projectId: string) {
 
     // Fire and forget — run the actual deployment in the background
     // This prevents blocking the HTTP response and avoids timeouts
-    runDeployInBackground(projectId, projectDir).catch(err => {
+    runDeployInBackground(projectId, projectDir, project.slug).catch(err => {
       console.error(`Background deploy failed for ${projectId}:`, err)
     })
 
@@ -824,7 +824,7 @@ export async function deployProject(projectId: string) {
 }
 
 // Background deployment function — runs after the HTTP response is sent
-async function runDeployInBackground(projectId: string, projectDir: string) {
+async function runDeployInBackground(projectId: string, projectDir: string, slug: string) {
   try {
     // Step 1: Pull images
     console.log(`[Deploy ${projectId}] Pulling images...`)
@@ -834,7 +834,7 @@ async function runDeployInBackground(projectId: string, projectDir: string) {
     })
 
     try {
-      await execAsync('docker compose pull', {
+      await execAsync(`docker compose -p ${slug} pull`, {
         cwd: projectDir,
         timeout: 600000, // 10 minute timeout for pulls
         maxBuffer: 1024 * 1024 * 50 // 50MB buffer
@@ -854,7 +854,7 @@ async function runDeployInBackground(projectId: string, projectDir: string) {
       data: { deployStatus: 'starting', deployLog: 'Starting Supabase services...' },
     })
 
-    await execAsync('docker compose up -d --remove-orphans', {
+    await execAsync(`docker compose -p ${slug} up -d --remove-orphans`, {
       cwd: projectDir,
       timeout: 300000, // 5 minute timeout
       maxBuffer: 1024 * 1024 * 50
@@ -864,7 +864,7 @@ async function runDeployInBackground(projectId: string, projectDir: string) {
     console.log(`[Deploy ${projectId}] Verifying containers...`)
     let containerCount = 0
     try {
-      const { stdout } = await execAsync('docker compose ps --format json', {
+      const { stdout } = await execAsync(`docker compose -p ${slug} ps --format json`, {
         cwd: projectDir,
         maxBuffer: 1024 * 1024 * 2
       })
@@ -925,7 +925,7 @@ export async function pauseProject(projectId: string) {
     const projectDir = path.join(process.cwd(), 'supabase-projects', project.slug, 'docker')
 
     // Stop Docker containers
-    await execAsync('docker compose stop', { cwd: projectDir })
+    await execAsync(`docker compose -p ${project.slug} stop`, { cwd: projectDir })
 
     // Update project status
     await prisma.project.update({
@@ -956,7 +956,7 @@ export async function deleteProject(projectId: string) {
     // Step 1: Stop and remove Docker containers
     try {
       console.log(`Stopping Docker containers for project ${project.slug}...`)
-      await execAsync('docker compose down --volumes --remove-orphans', {
+      await execAsync(`docker compose -p ${project.slug} down --volumes --remove-orphans`, {
         cwd: dockerDir,
         timeout: 120000, // 2 minutes timeout
         maxBuffer: 1024 * 1024 * 5 // 5MB buffer
@@ -1028,7 +1028,7 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
     // Step 1: Aggressively stop and remove all containers and networks
     console.log('Stopping and removing existing containers...')
     try {
-      await execAsync('docker compose down --remove-orphans --volumes --rmi local', { 
+      await execAsync(`docker compose -p ${project.slug} down --remove-orphans --volumes --rmi local`, { 
         cwd: projectDir, 
         timeout: 180000 
       })
@@ -1315,7 +1315,7 @@ end
     // First try to start existing containers
     try {
       console.log('Attempting docker compose start...')
-      await execAsync('docker compose start', {
+      await execAsync(`docker compose -p ${project.slug} start`, {
         cwd: projectDir,
         timeout: 180000
       })
@@ -1325,14 +1325,14 @@ end
       try {
         // First pull latest images
         console.log('Pulling latest images...')
-        await execAsync('docker compose pull', {
+        await execAsync(`docker compose -p ${project.slug} pull`, {
           cwd: projectDir,
           timeout: 300000,
           maxBuffer: 1024 * 1024 * 20
         })
         
         console.log('Starting containers with up...')
-        await execAsync('docker compose up -d', {
+        await execAsync(`docker compose -p ${project.slug} up -d`, {
           cwd: projectDir,
           timeout: 600000,
           maxBuffer: 1024 * 1024 * 20
@@ -1413,7 +1413,7 @@ export async function updateProjectToLatest(projectId: string) {
     // Step 1: Stop Docker containers
     console.log(`Stopping containers for project ${project.slug}...`)
     try {
-      await execAsync('docker compose stop', { cwd: projectDir, timeout: 60000 })
+      await execAsync(`docker compose -p ${project.slug} stop`, { cwd: projectDir, timeout: 60000 })
     } catch {
       console.log('Containers not running or already stopped, continuing...')
     }
@@ -1454,7 +1454,7 @@ export async function updateProjectToLatest(projectId: string) {
     
     try {
       console.log(`Attempting to start existing containers...`)
-      await execAsync('docker compose start', {
+      await execAsync(`docker compose -p ${project.slug} start`, {
         cwd: projectDir,
         timeout: 120000
       })
@@ -1462,7 +1462,7 @@ export async function updateProjectToLatest(projectId: string) {
     } catch {
       console.log(`Start failed, attempting docker compose up...`)
       try {
-        await execAsync('docker compose up -d --remove-orphans', {
+        await execAsync(`docker compose -p ${project.slug} up -d --remove-orphans`, {
           cwd: projectDir,
           timeout: 600000,
           maxBuffer: 1024 * 1024 * 20

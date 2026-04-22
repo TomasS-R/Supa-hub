@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { validateSession } from '@/lib/auth'
 import { prisma } from '@/lib/db'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+
+const execAsync = promisify(exec)
 
 interface RouteContext {
   params: Promise<{
@@ -11,9 +15,7 @@ interface RouteContext {
 
 const ALLOWED_SERVICES = ['kong', 'studio', 'analytics', 'db', 'rest', 'auth', 'storage']
 
-// Internal Docker ports — these are the ports services listen on INSIDE their containers,
-// not the external mapped ports. When communicating via Docker network (dokploy-network),
-// we always use internal ports.
+// Internal Docker ports — these are the ports services listen on INSIDE their containers.
 const INTERNAL_PORTS: Record<string, number> = {
   kong: 8000,
   studio: 3000,
@@ -24,17 +26,42 @@ const INTERNAL_PORTS: Record<string, number> = {
   db: 5432,
 }
 
-function getContainerName(service: string, slug: string): string {
-  const containerNames: Record<string, string> = {
-    kong: `${slug}-kong`,
-    studio: `${slug}-studio`,
-    analytics: `${slug}-analytics`,
-    auth: `${slug}-auth`,
-    rest: `${slug}-rest`,
-    storage: `${slug}-storage`,
-    db: `${slug}-db`,
+// Cache container IPs for 30 seconds to avoid calling docker inspect on every request
+const ipCache = new Map<string, { ip: string; timestamp: number }>()
+const IP_CACHE_TTL = 30_000 // 30 seconds
+
+/**
+ * Resolve a container's IP address using `docker inspect`.
+ * This bypasses Docker DNS entirely, which doesn't work reliably
+ * between Swarm services (SupaConsole) and standalone containers (Supabase projects).
+ */
+async function resolveContainerIP(containerName: string): Promise<string | null> {
+  // Check cache first
+  const cached = ipCache.get(containerName)
+  if (cached && Date.now() - cached.timestamp < IP_CACHE_TTL) {
+    return cached.ip
   }
-  return containerNames[service] || `${slug}-${service}`
+
+  try {
+    const { stdout } = await execAsync(
+      `docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' ${containerName}`,
+      { timeout: 5000 }
+    )
+    const ip = stdout.trim().split(' ').filter(Boolean)[0]
+    if (ip && ip.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+      ipCache.set(containerName, { ip, timestamp: Date.now() })
+      return ip
+    }
+    return null
+  } catch {
+    // Container not running or not found
+    ipCache.delete(containerName)
+    return null
+  }
+}
+
+function getContainerName(service: string, slug: string): string {
+  return `${slug}-${service}`
 }
 
 async function handleProxy(request: NextRequest, { params }: RouteContext) {
@@ -80,44 +107,34 @@ async function handleProxy(request: NextRequest, { params }: RouteContext) {
       )
     }
 
-    // Check if service is disabled
-    const disabledEnv = await prisma.projectEnvVar.findUnique({
-      where: { projectId_key: { projectId: project.id, key: 'DISABLED_MODULES' } }
-    })
-    const disabledModules = disabledEnv?.value ? disabledEnv.value.split(',') : []
-
-    if ((service === 'studio' && disabledModules.includes('studio')) ||
-        (service === 'analytics' && disabledModules.includes('analytics'))) {
-      return NextResponse.json(
-        { error: `Service ${service} is disabled for this project` },
-        { status: 403 }
-      )
-    }
-
-    // Build the target URL using internal Docker ports and container names.
-    // Both SupaConsole and Supabase services are on dokploy-network,
-    // so Docker DNS resolves container names automatically.
     const containerName = getContainerName(service, slug)
     const internalPort = INTERNAL_PORTS[service]
 
-    // Build the forwarded path — the path segments already exclude /api/proxy/[slug]
-    // because Next.js routing extracted [slug] and [...path] for us.
+    // Resolve container IP via docker inspect (bypasses Docker DNS issues)
+    const containerIP = await resolveContainerIP(containerName)
+    if (!containerIP) {
+      return NextResponse.json(
+        { error: `Service ${service} is not running. Container '${containerName}' not found or has no IP address.` },
+        { status: 503 }
+      )
+    }
+
+    // Build the forwarded path
     const forwardPath = remainingPath.length > 0
       ? '/' + remainingPath.join('/')
       : '/'
 
     const queryString = request.nextUrl.search || ''
-    const targetUrl = `http://${containerName}:${internalPort}${forwardPath}${queryString}`
+    const targetUrl = `http://${containerIP}:${internalPort}${forwardPath}${queryString}`
 
     let body: ReadableStream | null = null
     if (['POST', 'PUT', 'PATCH'].includes(request.method)) {
       body = request.body
     }
 
-    // Forward the request, but fix the Host header to match the target
+    // Forward the request with corrected headers
     const headers = new Headers(request.headers)
     headers.set('host', `${containerName}:${internalPort}`)
-    // Remove headers that could cause issues with the proxy
     headers.delete('connection')
     headers.delete('transfer-encoding')
 
@@ -132,7 +149,6 @@ async function handleProxy(request: NextRequest, { params }: RouteContext) {
       const response = await fetch(targetUrl, fetchOptions)
 
       const responseHeaders = new Headers(response.headers)
-      // Remove headers that Next.js shouldn't pass through
       responseHeaders.delete('content-encoding')
       responseHeaders.delete('content-length')
       responseHeaders.delete('transfer-encoding')
@@ -143,9 +159,11 @@ async function handleProxy(request: NextRequest, { params }: RouteContext) {
         headers: responseHeaders,
       })
     } catch (fetchError) {
+      // Clear cache on connection failure so next request retries inspect
+      ipCache.delete(containerName)
       console.error(`Proxy error for ${service} on project ${slug} (target: ${targetUrl}):`, fetchError)
       return NextResponse.json(
-        { error: `Failed to connect to ${service} service. Is the project running? Target: ${containerName}:${internalPort}` },
+        { error: `Failed to connect to ${service} service. Is the project running?` },
         { status: 502 }
       )
     }
@@ -158,7 +176,7 @@ async function handleProxy(request: NextRequest, { params }: RouteContext) {
   }
 }
 
-// Export all HTTP methods so Studio, Kong API, etc. all work through the proxy
+// Export all HTTP methods
 export const GET = handleProxy
 export const POST = handleProxy
 export const PUT = handleProxy
