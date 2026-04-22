@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { toast } from 'vibe-toast'
-import { Play, Pause, Trash2, RotateCw, Settings, RefreshCw, ExternalLink } from 'lucide-react'
+import { Play, Pause, Trash2, RotateCw, Settings, RefreshCw, ExternalLink, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -52,6 +52,8 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [projectUrlsMap, setProjectUrlsMap] = useState<Record<string, Record<string, string>>>({})
   const [openLinksDropdown, setOpenLinksDropdown] = useState<string | null>(null)
+  const [openStatusTooltip, setOpenStatusTooltip] = useState<string | null>(null)
+  const statusTooltipRef = useRef<HTMLDivElement>(null)
   const linksDropdownRef = useRef<HTMLDivElement>(null)
   const pollingRef = useRef<Set<string>>(new Set())
   const router = useRouter()
@@ -451,6 +453,15 @@ export default function DashboardPage() {
     }
   }
 
+  const statusLegendItems = [
+    { status: 'active', label: 'Active', color: 'bg-green-500', desc: 'All critical services (Kong, Studio, DB, Auth, Rest, Storage) are running normally.' },
+    { status: 'deploying', label: 'Deploying', color: 'bg-blue-500', desc: 'Project is being deployed. This may take a few minutes.' },
+    { status: 'partially_running', label: 'Partially Running', color: 'bg-orange-500', desc: 'Some services are running but not all. Pooler (supavisor) being down is non-critical — the database still works directly.' },
+    { status: 'paused', label: 'Paused', color: 'bg-yellow-500', desc: 'Project is paused. All containers are stopped.' },
+    { status: 'error', label: 'Error', color: 'bg-red-500', desc: 'A critical service (Kong, Studio, DB, Auth, Rest, or Storage) has failed. Click the wrench icon to restore the project.' },
+    { status: 'created', label: 'Created', color: 'bg-blue-400', desc: 'Project files are created but containers have not been started yet.' },
+  ]
+
   const toggleLinksDropdown = (projectId: string) => {
     setOpenLinksDropdown(openLinksDropdown === projectId ? null : projectId)
   }
@@ -460,12 +471,15 @@ export default function DashboardPage() {
       if (linksDropdownRef.current && !linksDropdownRef.current.contains(event.target as Node)) {
         setOpenLinksDropdown(null)
       }
+      if (statusTooltipRef.current && !statusTooltipRef.current.contains(event.target as Node)) {
+        setOpenStatusTooltip(null)
+      }
     }
-    if (openLinksDropdown) {
+    if (openLinksDropdown || openStatusTooltip) {
       document.addEventListener('mousedown', handleClickOutside)
       return () => document.removeEventListener('mousedown', handleClickOutside)
     }
-  }, [openLinksDropdown])
+  }, [openLinksDropdown, openStatusTooltip])
 
   const closeModal = () => {
     setSelectedProject(null)
@@ -616,26 +630,28 @@ export default function DashboardPage() {
                 <h2 className="text-3xl font-bold">Projects</h2>
                 <p className="text-muted-foreground">Manage your Supabase projects</p>
               </div>
-              <Button onClick={handleCreateProject}>
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-                New Project
-              </Button>
-              {projects.length > 0 && (
-                <div className="flex gap-2">
-                  <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
-                    <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-                    {refreshing ? 'Refreshing...' : 'Refresh'}
-                  </Button>
-                  <Button variant="outline" onClick={handleUpdateAll}>
-                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
-                    Update All
-                  </Button>
-                </div>
-              )}
+              <div className="flex items-center gap-3">
+                <Button onClick={handleCreateProject}>
+                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  New Project
+                </Button>
+                {projects.length > 0 && (
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
+                      <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+                      {refreshing ? 'Refreshing...' : 'Refresh'}
+                    </Button>
+                    <Button variant="outline" onClick={handleUpdateAll}>
+                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      Update All
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {projects.length === 0 ? (
@@ -654,8 +670,9 @@ export default function DashboardPage() {
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {projects.map((project) => {
+              <div className="flex gap-6">
+                <div className="flex-1 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                  {projects.map((project) => {
                   const isRunning = project.status === 'active' || project.status === 'partially_running'
                   const isPaused = project.status === 'paused' || project.status === 'not_found'
                   const isDeploying = project.status === 'deploying'
@@ -845,6 +862,36 @@ export default function DashboardPage() {
                     </Card>
                   )
                 })}
+                </div>
+                <div className="w-56 flex-shrink-0">
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2.5">Status Legend</p>
+                    <div className="space-y-1">
+                      {statusLegendItems.map((item) => (
+                        <div key={item.status} className="relative">
+                          <button
+                            onClick={() => setOpenStatusTooltip(openStatusTooltip === item.status ? null : item.status)}
+                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 transition-colors text-left"
+                          >
+                            <span className={`w-2 h-2 rounded-full ${item.color} flex-shrink-0`}></span>
+                            <span className="text-xs">{item.label}</span>
+                          </button>
+                          {openStatusTooltip === item.status && (
+                            <div ref={statusTooltipRef} className="absolute left-0 top-full mt-1 z-50 w-64 bg-background border rounded-lg shadow-xl animate-in fade-in zoom-in-95 duration-100">
+                              <div className="p-3">
+                                <div className="flex items-center gap-1.5 mb-1.5">
+                                  <span className={`w-2 h-2 rounded-full ${item.color}`}></span>
+                                  <span className="text-xs font-medium">{item.label}</span>
+                                </div>
+                                <p className="text-xs text-muted-foreground leading-relaxed">{item.desc}</p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>
