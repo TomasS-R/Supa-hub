@@ -578,7 +578,7 @@ export async function createProject(name: string, userId: string, description?: 
     }
 
     // Add dokploy-network to networks section if not present
-    let hasNetworks = updatedLines.some(l => l.trim() === 'networks:')
+    const hasNetworks = updatedLines.some(l => l.trim() === 'networks:')
     if (!hasNetworks) {
       updatedLines.push('')
       updatedLines.push('networks:')
@@ -829,7 +829,7 @@ export async function deployProject(projectId: string) {
         if (containerLogs) {
           errorMessage += `\n\n--- Container Failing Logs ---\n${containerLogs}`
         }
-      } catch (logError) {
+      } catch {
         // Ignore errors fetching logs
       }
 
@@ -995,7 +995,7 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
         timeout: 180000 
       })
       console.log('Existing containers removed')
-    } catch (downError) {
+    } catch {
       console.log('Trying alternative cleanup...')
       try {
         await execAsync('docker stop $(docker ps -q --filter "name=' + project.slug + '")', { 
@@ -1282,7 +1282,7 @@ end
         timeout: 180000
       })
       console.log('Containers started successfully')
-    } catch (startError) {
+    } catch {
       console.log('Start failed, trying docker compose up...')
       try {
         // First pull latest images
@@ -1373,7 +1373,7 @@ export async function updateProjectToLatest(projectId: string) {
     console.log(`Stopping containers for project ${project.slug}...`)
     try {
       await execAsync('docker compose stop', { cwd: projectDir, timeout: 60000 })
-    } catch (stopError) {
+    } catch {
       console.log('Containers not running or already stopped, continuing...')
     }
 
@@ -1418,7 +1418,7 @@ export async function updateProjectToLatest(projectId: string) {
         timeout: 120000
       })
       console.log(`Containers started for project ${project.slug}`)
-    } catch (startError) {
+    } catch {
       console.log(`Start failed, attempting docker compose up...`)
       try {
         await execAsync('docker compose up -d --remove-orphans', {
@@ -1427,7 +1427,7 @@ export async function updateProjectToLatest(projectId: string) {
           maxBuffer: 1024 * 1024 * 20
         })
         console.log(`Containers started for project ${project.slug}`)
-      } catch (upError) {
+      } catch {
         throw new Error('Failed to start containers. Try restoring the project.')
       }
     }
