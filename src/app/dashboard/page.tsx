@@ -14,6 +14,8 @@ interface Project {
   slug: string
   description?: string
   status: string
+  deployStatus?: string
+  deployLog?: string
   createdAt: string
 }
 
@@ -369,8 +371,10 @@ export default function DashboardPage() {
     setInlineActionLoading(project.id)
     try {
       const response = await fetch(`/api/projects/${project.id}/deploy`, { method: 'POST' })
-      if (response.ok) {
-        toast.success('Project deploying', { description: `${project.name} is starting up...` })
+      if (response.ok || response.status === 202) {
+        toast.success('Deployment started', { description: `${project.name} is deploying in the background...` })
+        // Start polling for deploy status
+        pollDeployStatus(project.id)
         await fetchProjects()
       } else {
         const data = await response.json()
@@ -381,6 +385,35 @@ export default function DashboardPage() {
     } finally {
       setInlineActionLoading(null)
     }
+  }
+
+  const pollDeployStatus = (projectId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/projects/${projectId}/deploy-status`)
+        if (!response.ok) {
+          clearInterval(interval)
+          return
+        }
+        const data = await response.json()
+        
+        if (data.deployStatus === 'done') {
+          clearInterval(interval)
+          toast.success('Deployment complete', { description: data.deployLog || 'All containers are running.' })
+          await fetchProjects()
+        } else if (data.deployStatus === 'failed') {
+          clearInterval(interval)
+          toast.error('Deployment failed', { description: data.deployLog || 'Check server logs for details.' })
+          await fetchProjects()
+        }
+        // For 'pulling' and 'starting' — continue polling
+      } catch {
+        clearInterval(interval)
+      }
+    }, 5000) // Poll every 5 seconds
+    
+    // Safety: stop polling after 15 minutes
+    setTimeout(() => clearInterval(interval), 15 * 60 * 1000)
   }
 
   const handleRefresh = async () => {
@@ -612,6 +645,7 @@ export default function DashboardPage() {
                 {projects.map((project) => {
                   const isRunning = project.status === 'active' || project.status === 'partially_running'
                   const isPaused = project.status === 'paused' || project.status === 'not_found'
+                  const isDeploying = project.status === 'deploying'
                   
                   return (
                     <Card 
@@ -637,13 +671,15 @@ export default function DashboardPage() {
                           
                           <div className="flex items-center gap-2 flex-shrink-0">
                             <div className={`px-2 py-1 rounded-full text-xs ${project.status === 'active' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' :
+                                project.status === 'deploying' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse' :
                                 project.status === 'paused' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400' :
                                 project.status === 'partially_running' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400' :
                                 project.status === 'error' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' :
                                 project.status === 'created' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400' :
                                 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
                               }`}>
-                              {project.status === 'partially_running' ? 'Partially Running' :
+                              {project.status === 'deploying' ? `Deploying${project.deployStatus ? ` (${project.deployStatus})` : '...'}` :
+                               project.status === 'partially_running' ? 'Partially Running' :
                                project.status === 'not_found' ? 'Not Setup' :
                                project.status.charAt(0).toUpperCase() + project.status.slice(1).replace('_', ' ')}
                             </div>
@@ -735,7 +771,7 @@ export default function DashboardPage() {
                               <Settings className="h-3.5 w-3.5" />
                             </Button>
                             
-                            {isPaused && !isRunning && (
+                            {isPaused && !isRunning && !isDeploying && (
                               <Button
                                 variant="ghost"
                                 size="icon"

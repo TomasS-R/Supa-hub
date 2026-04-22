@@ -29,6 +29,13 @@ export async function GET(request: NextRequest) {
 
     const projectsWithRealStatus = await Promise.all(
       projects.map(async (project) => {
+        // If project is deploying, keep that status (containers may not exist yet)
+        if (project.status === 'deploying') {
+          return {
+            ...project,
+            dockerStatus: { status: 'deploying', containers: [] }
+          }
+        }
         const dockerStatus = await getProjectStatus(project.slug)
         return {
           ...project,

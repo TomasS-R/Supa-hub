@@ -37,7 +37,11 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       )
     }
 
-    return NextResponse.json({ success: true })
+    // Return 202 Accepted — deployment runs in the background
+    return NextResponse.json(
+      { success: true, status: 'deploying', message: 'Deployment started. Check project status for progress.' },
+      { status: 202 }
+    )
   } catch (error) {
     console.error('Deploy project error:', error)
     return NextResponse.json(

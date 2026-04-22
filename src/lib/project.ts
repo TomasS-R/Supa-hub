@@ -780,124 +780,137 @@ export async function deployProject(projectId: string) {
 
     const projectDir = path.join(process.cwd(), 'supabase-projects', project.slug, 'docker')
 
-    // Run pre-flight checks
+    // Run pre-flight checks (fast — don't need internet check here)
     console.log('Running pre-flight checks...')
-    const checks = await checkDockerPrerequisites()
-
-    if (!checks.docker) {
-      throw new Error('Docker is not installed or not running. Please install Docker Desktop and ensure it is started before deploying.')
-    }
-
-    if (!checks.dockerCompose) {
-      throw new Error('Docker Compose is not available. Please ensure Docker Desktop includes Docker Compose or install it separately.')
-    }
-
-    // Try to run Docker commands with better error handling
+    let dockerOk = false
+    let composeOk = false
     try {
-      // Only pull images if we have internet connectivity
-      if (checks.internetConnection) {
-        console.log('Attempting to pull latest Docker images...')
-        try {
-          await execAsync('docker compose pull', {
-            cwd: projectDir,
-            timeout: 300000, // 5 minute timeout
-            maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-          })
-        } catch (pullError) {
-          console.warn('Failed to pull some images, will try to use existing/cached images:', pullError)
-          // Continue with deployment even if pull fails
-        }
-      } else {
-        console.warn('No internet connectivity detected, using cached Docker images')
-      }
-
-      // Start the services
-      console.log('Starting Supabase services...')
-      await execAsync('docker compose up -d --remove-orphans', {
-        cwd: projectDir,
-        timeout: 300000, // 5 minute timeout
-        maxBuffer: 1024 * 1024 * 10 // 10MB buffer
-      })
-
-    } catch (composeError) {
-      // If the main docker compose command fails, provide better error message
-      let errorMessage = composeError instanceof Error ? composeError.message : 'Unknown Docker error'
-
-      // Attempt to fetch container logs to see why they failed
-      try {
-        const { stdout: containerLogs } = await execAsync('docker compose logs --tail=50 db analytics', { cwd: projectDir })
-        if (containerLogs) {
-          errorMessage += `\n\n--- Container Failing Logs ---\n${containerLogs}`
-        }
-      } catch {
-        // Ignore errors fetching logs
-      }
-
-      if (errorMessage.includes('maxBuffer length exceeded')) {
-        throw new Error('Docker deployment generated too much output. This usually means the deployment is working but Docker is downloading many large images. Please wait a few more minutes and check Docker Desktop or Server.')
-      } else if (errorMessage.includes('no such host') || errorMessage.includes('dial tcp')) {
-        throw new Error(`Network connectivity issue: Unable to reach Docker registry.\n${errorMessage}`)
-      } else if (errorMessage.includes('permission denied')) {
-        throw new Error(`Docker permission denied. Please ensure your environment has privileges.\n${errorMessage}`)
-      } else if (errorMessage.includes('address already in use') || errorMessage.includes('port is already allocated') || errorMessage.includes('Ports are not available')) {
-        throw new Error(`Uno o más puertos asignados ya están en uso por otra aplicación. Por favor, elige otros puertos en la configuración e intenta nuevamente.\n${errorMessage}`)
-      } else if (errorMessage.includes('dependency failed to start')) {
-        throw new Error(`A critical Supabase container crashed during startup (likely Out of Memory on a VPS, or a configuration error). Check if your server has at least 4GB of RAM.\n${errorMessage}`)
-      } else {
-        throw new Error(`Docker deployment failed: ${errorMessage}`)
-      }
-    }
-
-    // Verify that containers are running
+      await execAsync('docker --version', { timeout: 5000 })
+      dockerOk = true
+    } catch { /* Docker not available */ }
     try {
-      const { stdout } = await execAsync('docker compose ps --format json', {
-        cwd: projectDir,
-        maxBuffer: 1024 * 1024 * 2 // 2MB buffer for container status
-      })
-      const containers = JSON.parse(`[${stdout.trim().split('\n').join(',')}]`)
-      const runningContainers = containers.filter((c: { State: string }) => c.State === 'running')
-      console.log(`Deployment successful: ${runningContainers.length} containers running`)
-    } catch {
-      console.warn('Could not verify container status, but deployment may have succeeded')
+      await execAsync('docker compose version', { timeout: 5000 })
+      composeOk = true
+    } catch { /* Compose not available */ }
+
+    if (!dockerOk) {
+      throw new Error('Docker is not installed or not running.')
+    }
+    if (!composeOk) {
+      throw new Error('Docker Compose is not available.')
     }
 
-    // Update project status
+    // Mark as deploying immediately
     await prisma.project.update({
       where: { id: projectId },
-      data: { status: 'active' },
+      data: { 
+        status: 'deploying',
+        deployStatus: 'pulling',
+        deployLog: 'Starting deployment...',
+      },
     })
 
-    // Connect SupaConsole to the project's Docker network
-    try {
-      const networkName = `${project.slug}_default`
-      const containerName = 'supaconsole-app'
-      
-      try {
-        await execAsync(`docker network inspect ${networkName}`, { timeout: 5000 })
-        
-        try {
-          const { stdout } = await execAsync(
-            `docker network inspect ${networkName} --format '{{range $key, $val := .Containers}}{{$key}} {{end}}'`,
-            { timeout: 5000 }
-          )
-          
-          if (!stdout.includes(containerName)) {
-            console.log(`Connecting SupaConsole to network ${networkName}...`)
-            try {
-              await execAsync(`docker network connect ${networkName} ${containerName}`, { timeout: 10000 })
-              console.log(`Connected to network ${networkName}`)
-            } catch {}
-          }
-        } catch {}
-      } catch {}
-    } catch {}
+    // Fire and forget — run the actual deployment in the background
+    // This prevents blocking the HTTP response and avoids timeouts
+    runDeployInBackground(projectId, projectDir).catch(err => {
+      console.error(`Background deploy failed for ${projectId}:`, err)
+    })
 
-    return { success: true }
+    return { success: true, status: 'deploying' }
   } catch (error) {
-    console.error('Failed to deploy project:', error)
+    console.error('Failed to start deployment:', error)
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
   }
 }
+
+// Background deployment function — runs after the HTTP response is sent
+async function runDeployInBackground(projectId: string, projectDir: string) {
+  try {
+    // Step 1: Pull images
+    console.log(`[Deploy ${projectId}] Pulling images...`)
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { deployStatus: 'pulling', deployLog: 'Pulling Docker images...' },
+    })
+
+    try {
+      await execAsync('docker compose pull', {
+        cwd: projectDir,
+        timeout: 600000, // 10 minute timeout for pulls
+        maxBuffer: 1024 * 1024 * 50 // 50MB buffer
+      })
+    } catch (pullError) {
+      console.warn(`[Deploy ${projectId}] Pull warning (continuing):`, pullError)
+      await prisma.project.update({
+        where: { id: projectId },
+        data: { deployLog: 'Some images could not be pulled, using cached versions...' },
+      })
+    }
+
+    // Step 2: Start services
+    console.log(`[Deploy ${projectId}] Starting services...`)
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { deployStatus: 'starting', deployLog: 'Starting Supabase services...' },
+    })
+
+    await execAsync('docker compose up -d --remove-orphans', {
+      cwd: projectDir,
+      timeout: 300000, // 5 minute timeout
+      maxBuffer: 1024 * 1024 * 50
+    })
+
+    // Step 3: Verify containers
+    console.log(`[Deploy ${projectId}] Verifying containers...`)
+    let containerCount = 0
+    try {
+      const { stdout } = await execAsync('docker compose ps --format json', {
+        cwd: projectDir,
+        maxBuffer: 1024 * 1024 * 2
+      })
+      const lines = stdout.trim().split('\n').filter(Boolean)
+      const containers = JSON.parse(`[${lines.join(',')}]`)
+      containerCount = containers.filter((c: { State: string }) => c.State === 'running').length
+    } catch {
+      console.warn(`[Deploy ${projectId}] Could not verify containers`)
+    }
+
+    // Mark as done
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        status: 'active',
+        deployStatus: 'done',
+        deployLog: `Deployment complete. ${containerCount} containers running.`,
+      },
+    })
+    console.log(`[Deploy ${projectId}] Deployment complete: ${containerCount} containers running`)
+
+  } catch (error) {
+    console.error(`[Deploy ${projectId}] Background deploy failed:`, error)
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+    // Parse common error patterns for user-friendly messages
+    let userMessage = `Deployment failed: ${errorMessage}`
+    if (errorMessage.includes('address already in use') || errorMessage.includes('port is already allocated')) {
+      userMessage = 'Port conflict: one or more ports are already in use. Try restoring with new ports.'
+    } else if (errorMessage.includes('dependency failed to start')) {
+      userMessage = 'A critical container crashed during startup (possibly out of memory).'
+    } else if (errorMessage.includes('no such host') || errorMessage.includes('dial tcp')) {
+      userMessage = 'Network connectivity issue: unable to reach Docker registry.'
+    }
+
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        status: 'error',
+        deployStatus: 'failed',
+        deployLog: userMessage,
+      },
+    })
+  }
+}
+
 
 export async function pauseProject(projectId: string) {
   try {
@@ -1360,64 +1373,8 @@ end
       }
     }
 
-    // Connect SupaConsole to the project's Docker network for proxy access
-    try {
-      const projectName = project.slug
-      const networkName = `${projectName}_default`
-      const containerName = 'supaconsole-app'
-      
-      // Check if network exists
-      try {
-        await execAsync(`docker network inspect ${networkName}`, { timeout: 5000 })
-        
-        // Check if already connected
-        try {
-          await execAsync(`docker network inspect ${networkName} --format '{{range .Containers}}{{.Name}} {{end}}'`, {
-            timeout: 5000
-          }).then(({ stdout }) => {
-            if (!stdout.includes(containerName)) {
-              console.log(`Connecting SupaConsole to network ${networkName}...`)
-              execAsync(`docker network connect ${networkName} ${containerName}`).catch(() => {})
-            }
-          }).catch(() => {})
-        } catch {}
-      } catch {}
-    } catch {
-      console.warn('Could not connect to project network (non-critical)')
-    }
-
-    // Connect SupaConsole to the project's Docker network for proxy access
-    try {
-      const networkName = `${project.slug}_default`
-      const containerName = 'supaconsole-app'
-      
-      try {
-        await execAsync(`docker network inspect ${networkName}`, { timeout: 5000 })
-        
-        try {
-          const { stdout } = await execAsync(
-            `docker network inspect ${networkName} --format '{{range $key, $val := .Containers}}{{$key}} {{end}}'`,
-            { timeout: 5000 }
-          )
-          
-          if (!stdout.includes(containerName)) {
-            console.log(`Connecting SupaConsole to network ${networkName}...`)
-            try {
-              await execAsync(`docker network connect ${networkName} ${containerName}`, { timeout: 10000 })
-              console.log(`Successfully connected to network ${networkName}`)
-            } catch (connectErr) {
-              console.warn(`Failed to connect to network ${networkName}:`, connectErr)
-            }
-          }
-        } catch (inspectErr) {
-          console.warn('Could not check network membership:', inspectErr)
-        }
-      } catch (netErr) {
-        console.warn(`Network ${networkName} not found (project may not be running):`, netErr)
-      }
-    } catch (connectErr) {
-      console.warn('Could not connect SupaConsole to project network:', connectErr)
-    }
+    // Note: No need for docker network connect — both SupaConsole and project services
+    // are on dokploy-network, so Docker DNS resolves container names automatically.
 
     console.log(`Project ${project.name} restored successfully`)
 
