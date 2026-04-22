@@ -747,8 +747,16 @@ export async function getProjectStatus(slug: string) {
     const pausedCount = containerInfo.filter((c: any) => 
       c.state === 'exited' || c.state === 'stopped' || c.state === 'paused'
     ).length
-    // Only count truly broken containers (dead, restarting loops)
-    const deadCount = containerInfo.filter((c: any) => 
+
+    // Pooler (supavisor) is non-critical — it's optional connection pooling
+    // The database itself (direct port) still works even if pooler is down
+    const nonCriticalNames = ['pooler', 'supavisor']
+    const criticalContainers = containerInfo.filter((c: any) => 
+      !nonCriticalNames.some(name => c.name.includes(name))
+    )
+    
+    // Only count truly broken critical containers (dead, restarting loops)
+    const deadCount = criticalContainers.filter((c: any) => 
       c.state === 'dead' || c.state === 'restarting'
     ).length
 
