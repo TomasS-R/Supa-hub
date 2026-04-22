@@ -867,6 +867,31 @@ export async function deployProject(projectId: string) {
       data: { status: 'active' },
     })
 
+    // Connect SupaConsole to the project's Docker network
+    try {
+      const networkName = `${project.slug}_default`
+      const containerName = 'supaconsole-app'
+      
+      try {
+        await execAsync(`docker network inspect ${networkName}`, { timeout: 5000 })
+        
+        try {
+          const { stdout } = await execAsync(
+            `docker network inspect ${networkName} --format '{{range $key, $val := .Containers}}{{$key}} {{end}}'`,
+            { timeout: 5000 }
+          )
+          
+          if (!stdout.includes(containerName)) {
+            console.log(`Connecting SupaConsole to network ${networkName}...`)
+            try {
+              await execAsync(`docker network connect ${networkName} ${containerName}`, { timeout: 10000 })
+              console.log(`Connected to network ${networkName}`)
+            } catch {}
+          }
+        } catch {}
+      } catch {}
+    } catch {}
+
     return { success: true }
   } catch (error) {
     console.error('Failed to deploy project:', error)
@@ -1333,6 +1358,65 @@ end
         
         throw new Error('Failed to start containers. Check Docker Desktop and try again.')
       }
+    }
+
+    // Connect SupaConsole to the project's Docker network for proxy access
+    try {
+      const projectName = project.slug
+      const networkName = `${projectName}_default`
+      const containerName = 'supaconsole-app'
+      
+      // Check if network exists
+      try {
+        await execAsync(`docker network inspect ${networkName}`, { timeout: 5000 })
+        
+        // Check if already connected
+        try {
+          await execAsync(`docker network inspect ${networkName} --format '{{range .Containers}}{{.Name}} {{end}}'`, {
+            timeout: 5000
+          }).then(({ stdout }) => {
+            if (!stdout.includes(containerName)) {
+              console.log(`Connecting SupaConsole to network ${networkName}...`)
+              execAsync(`docker network connect ${networkName} ${containerName}`).catch(() => {})
+            }
+          }).catch(() => {})
+        } catch {}
+      } catch {}
+    } catch {
+      console.warn('Could not connect to project network (non-critical)')
+    }
+
+    // Connect SupaConsole to the project's Docker network for proxy access
+    try {
+      const networkName = `${project.slug}_default`
+      const containerName = 'supaconsole-app'
+      
+      try {
+        await execAsync(`docker network inspect ${networkName}`, { timeout: 5000 })
+        
+        try {
+          const { stdout } = await execAsync(
+            `docker network inspect ${networkName} --format '{{range $key, $val := .Containers}}{{$key}} {{end}}'`,
+            { timeout: 5000 }
+          )
+          
+          if (!stdout.includes(containerName)) {
+            console.log(`Connecting SupaConsole to network ${networkName}...`)
+            try {
+              await execAsync(`docker network connect ${networkName} ${containerName}`, { timeout: 10000 })
+              console.log(`Successfully connected to network ${networkName}`)
+            } catch (connectErr) {
+              console.warn(`Failed to connect to network ${networkName}:`, connectErr)
+            }
+          }
+        } catch (inspectErr) {
+          console.warn('Could not check network membership:', inspectErr)
+        }
+      } catch (netErr) {
+        console.warn(`Network ${networkName} not found (project may not be running):`, netErr)
+      }
+    } catch (connectErr) {
+      console.warn('Could not connect SupaConsole to project network:', connectErr)
     }
 
     console.log(`Project ${project.name} restored successfully`)

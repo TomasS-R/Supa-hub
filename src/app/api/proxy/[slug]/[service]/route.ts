@@ -1,6 +1,66 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { validateSession } from '@/lib/auth'
 import { prisma } from '@/lib/db'
+import { exec } from 'child_process'
+import { promisify } from 'util'
+
+const execAsync = promisify(exec)
+
+// Cache for network connection attempts
+const networkConnectionCache = new Map<string, boolean>()
+
+async function ensureNetworkConnected(slug: string): Promise<void> {
+  const cacheKey = slug
+  if (networkConnectionCache.has(cacheKey)) return
+  
+  const networkName = `${slug}_default`
+  
+  try {
+    // Check if network exists
+    await execAsync(`docker network inspect ${networkName}`, { timeout: 5000 })
+    
+    // Get our own container name
+    let containerName: string
+    try {
+      const { stdout } = await execAsync("cat /proc/1/cgroup 2>/dev/null | grep -o 'supaconsole[^/]*' | head -1", { timeout: 5000 })
+      containerName = stdout.trim()
+    } catch {
+      containerName = ''
+    }
+    
+    if (!containerName) {
+      try {
+        const { stdout } = await execAsync('hostname', { timeout: 5000 })
+        containerName = stdout.trim()
+      } catch {
+        containerName = ''
+      }
+    }
+    
+    if (!containerName) {
+      console.warn('Could not detect own container name')
+      return
+    }
+    
+    // Check if already connected
+    try {
+      const { stdout } = await execAsync(
+        `docker network inspect ${networkName} --format '{{range $key, $val := .Containers}}{{$key}} {{end}}'`,
+        { timeout: 5000 }
+      )
+      
+      if (!stdout.includes(containerName)) {
+        console.log(`Connecting ${containerName} to network ${networkName}...`)
+        await execAsync(`docker network connect ${networkName} ${containerName}`, { timeout: 10000 })
+        console.log(`Connected to network ${networkName}`)
+      }
+    } catch {}
+  } catch {
+    // Network doesn't exist yet (project not deployed)
+  }
+  
+  networkConnectionCache.set(cacheKey, true)
+}
 
 interface RouteContext {
   params: Promise<{
@@ -10,6 +70,22 @@ interface RouteContext {
 }
 
 const ALLOWED_SERVICES = ['kong', 'studio', 'analytics', 'db', 'rest', 'auth', 'storage']
+
+async function resolveHost(service: string, slug: string, port: string): Promise<string> {
+  // Priority 1: Container name (when on same Docker network)
+  // Docker DNS resolves container names like {slug}-kong within the same network
+  const containerNames: Record<string, string> = {
+    kong: `${slug}-kong`,
+    studio: `${slug}-studio`,
+    analytics: `${slug}-analytics`,
+    auth: `${slug}-auth`,
+    rest: `${slug}-rest`,
+    storage: `${slug}-storage`,
+    db: `${slug}-db`,
+  }
+  
+  return containerNames[service] || `${slug}-${service}`
+}
 
 export async function GET(request: NextRequest, { params }: RouteContext) {
   const { slug, service } = await params
@@ -102,7 +178,11 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
       )
     }
 
-    const targetHost = process.env.DOCKER_HOST_IP || 'host.docker.internal'
+    // Ensure SupaConsole is connected to the project's Docker network
+    await ensureNetworkConnected(slug)
+
+    // Resolve the target host (container name when on same network)
+    const targetHost = await resolveHost(service, slug, targetPort)
     const targetUrl = `http://${targetHost}:${targetPort}${request.nextUrl.pathname}${request.nextUrl.search}`
     
     let body: ReadableStream | null = null
@@ -133,9 +213,9 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
         headers: responseHeaders,
       })
     } catch (fetchError) {
-      console.error(`Proxy error for ${service} on project ${slug}:`, fetchError)
+      console.error(`Proxy error for ${service} on project ${slug} (host: ${targetHost}:${targetPort}):`, fetchError)
       return NextResponse.json(
-        { error: `Failed to connect to ${service} service. Is the project running?` },
+        { error: `Failed to connect to ${service} service. Is the project running? Tried host: ${targetHost}:${targetPort}` },
         { status: 502 }
       )
     }
