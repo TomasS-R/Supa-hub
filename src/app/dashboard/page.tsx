@@ -73,21 +73,21 @@ export default function DashboardPage() {
         if (isLocal) {
           urls['API Gateway'] = `${serverProtocol}//${serverHost}:${envVars.KONG_HTTP_PORT}`
         } else {
-          urls['API Gateway'] = `${serverProtocol}//${serverHost}/proxy/${slug}/kong`
+          urls['API Gateway'] = `${serverProtocol}//${serverHost}/api/proxy/${slug}/kong`
         }
       }
       if (envVars.STUDIO_PORT && !disabledVars.includes('studio')) {
         if (isLocal) {
           urls['Supabase Studio'] = `${serverProtocol}//${serverHost}:${envVars.STUDIO_PORT}`
         } else {
-          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/proxy/${slug}/studio`
+          urls['Supabase Studio'] = `${serverProtocol}//${serverHost}/api/proxy/${slug}/studio`
         }
       }
       if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
         if (isLocal) {
           urls['Analytics'] = `${serverProtocol}//${serverHost}:${envVars.ANALYTICS_PORT}`
         } else {
-          urls['Analytics'] = `${serverProtocol}//${serverHost}/proxy/${slug}/analytics`
+          urls['Analytics'] = `${serverProtocol}//${serverHost}/api/proxy/${slug}/analytics`
         }
       }
       if (envVars.POSTGRES_PORT) {
