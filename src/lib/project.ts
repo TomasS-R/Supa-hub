@@ -568,10 +568,30 @@ export async function createProject(name: string, userId: string, description?: 
         updatedLine = line.replace('- 4000:4000', `- \${ANALYTICS_PORT}:4000`)
       }
 
-      // 3b. Replace pooler port mapping: ${POSTGRES_PORT}:5432 → ${POSTGRES_HOST_PORT}:5432
-      if (line.includes('POSTGRES_PORT}:5432')) {
-        updatedLine = line.replace('POSTGRES_PORT}:5432', 'POSTGRES_HOST_PORT}:5432')
-      }
+        // 3b. Replace pooler port mapping: ${POSTGRES_PORT}:5432 → ${POSTGRES_HOST_PORT}:5432
+        if (line.includes('POSTGRES_PORT}:5432')) {
+          updatedLine = line.replace('POSTGRES_PORT}:5432', 'POSTGRES_HOST_PORT}:5432')
+        }
+
+        // 3c. Add DB_HOST env var to pooler service (supavisor)
+        if (currentService === 'supavisor' && line.trim() === '- PORT=4000') {
+          updatedLine = line
+          // Add DB_HOST after PORT=4000
+          updatedLines.push(updatedLine)
+          updatedLines.push(`          - DB_HOST=${slug}-db`)
+          continue
+        }
+
+        // 4. Mount init script in DB service
+        if (currentService === 'db') {
+          if (line.trim() === 'volumes:') {
+            inVolumes = true
+          } else if (inVolumes && (line.match(/^ [a-z_]+:/) || (line.trim() === '' && i + 1 < lines.length && !lines[i + 1].trim().startsWith('-')))) {
+            // We reached the end of volumes section (next key or empty line)
+            updatedLines.push(' - ./init-db.sql:/docker-entrypoint-initdb.d/migrations/999-supaconsole-init.sql:ro')
+            inVolumes = false
+          }
+        }
 
       // 4. Mount init script in DB service
       if (currentService === 'db') {
@@ -1205,7 +1225,31 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
     dockerComposeContent = dockerComposeContent.replace(/retries: 3/g, 'retries: 60')
     dockerComposeContent = dockerComposeContent.replace(/"localhost"/g, '"127.0.0.1"')
 
-    await fs.writeFile(projectDockerComposePath, dockerComposeContent)
+    // Add DB_HOST env var to pooler service (supavisor) - line by line processing
+    const composeLines = dockerComposeContent.split('\n')
+    const updatedComposeLines: string[] = []
+    let currentComposeService: string | null = null
+
+    for (let i = 0; i < composeLines.length; i++) {
+      const composeLine = composeLines[i]
+
+      // Match service definition (e.g., "  supavisor:")
+      const composeServiceMatch = composeLine.match(/^  ([a-z_]+):/)
+      if (composeServiceMatch) {
+        currentComposeService = composeServiceMatch[1]
+      }
+
+      // Add DB_HOST after PORT=4000 in supavisor service
+      if (currentComposeService === 'supavisor' && composeLine.trim() === '- PORT=4000') {
+        updatedComposeLines.push(composeLine)
+        updatedComposeLines.push(`          - DB_HOST=${project.slug}-db`)
+        continue
+      }
+
+      updatedComposeLines.push(composeLine)
+    }
+
+    await fs.writeFile(projectDockerComposePath, updatedComposeLines.join('\n'))
     console.log('docker-compose.yml restored')
 
     // Step 5: Write .env file with pgbouncer=true for Prisma compatibility
