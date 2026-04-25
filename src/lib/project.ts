@@ -427,6 +427,7 @@ export async function createProject(name: string, userId: string, description?: 
       PG_META_CRYPTO_KEY: generateRandomString(32),
 
       // Dynamically assigned available ports
+      POSTGRES_PORT: '5432',
       POSTGRES_HOST_PORT: availablePorts.POSTGRES_HOST_PORT.toString(),
       POOLER_PROXY_PORT_TRANSACTION: availablePorts.POOLER_PROXY_PORT_TRANSACTION.toString(),
       KONG_HTTP_PORT: availablePorts.KONG_HTTP_PORT.toString(),
@@ -1076,11 +1077,15 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       envVarsMap[ev.key] = ev.value
     })
 
-    // Step 2b: Migrate old POSTGRES_PORT → POSTGRES_HOST_PORT for existing projects
+    // Step 2b: Migrate old POSTGRES_PORT (host port) → POSTGRES_HOST_PORT for existing projects
     if (envVarsMap['POSTGRES_PORT'] && !envVarsMap['POSTGRES_HOST_PORT']) {
       console.log('Migrating POSTGRES_PORT → POSTGRES_HOST_PORT for existing project...')
       envVarsMap['POSTGRES_HOST_PORT'] = envVarsMap['POSTGRES_PORT']
-      delete envVarsMap['POSTGRES_PORT']
+      // POSTGRES_PORT should always be 5432 for internal container communication
+      envVarsMap['POSTGRES_PORT'] = '5432'
+      await prisma.projectEnvVar.delete({
+        where: { projectId_key: { projectId, key: 'POSTGRES_PORT' } },
+      })
       await prisma.projectEnvVar.create({
         data: {
           projectId,
@@ -1088,8 +1093,12 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
           value: envVarsMap['POSTGRES_HOST_PORT'],
         },
       })
-      await prisma.projectEnvVar.delete({
-        where: { projectId_key: { projectId, key: 'POSTGRES_PORT' } },
+      await prisma.projectEnvVar.create({
+        data: {
+          projectId,
+          key: 'POSTGRES_PORT',
+          value: '5432',
+        },
       })
       console.log('Migration complete')
     }
@@ -1101,6 +1110,7 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       console.log('Using custom ports:', customPorts)
       
       envVarsMap['POSTGRES_HOST_PORT'] = customPorts.POSTGRES_HOST_PORT.toString()
+      envVarsMap['POSTGRES_PORT'] = '5432'
       envVarsMap['POOLER_PROXY_PORT_TRANSACTION'] = customPorts.POOLER_PROXY_PORT_TRANSACTION.toString()
       portsChanged = true
     } else if (forceNewPorts) {
@@ -1122,6 +1132,7 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       envVarsMap['STUDIO_PORT'] = availablePorts.STUDIO_PORT.toString()
       envVarsMap['ANALYTICS_PORT'] = availablePorts.ANALYTICS_PORT.toString()
       envVarsMap['POSTGRES_HOST_PORT'] = availablePorts.POSTGRES_HOST_PORT.toString()
+      envVarsMap['POSTGRES_PORT'] = '5432'
       envVarsMap['POOLER_PROXY_PORT_TRANSACTION'] = availablePorts.POOLER_PROXY_PORT_TRANSACTION.toString()
       envVarsMap['SUPABASE_PUBLIC_URL'] = `http://localhost:${availablePorts.KONG_HTTP_PORT}`
       envVarsMap['API_EXTERNAL_URL'] = `http://localhost:${availablePorts.KONG_HTTP_PORT}`
