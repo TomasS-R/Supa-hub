@@ -575,21 +575,10 @@ export async function createProject(name: string, userId: string, description?: 
 
         // 3c. Add DB_HOST env var to pooler service (supavisor) - skip PORT line, add DB_HOST before it
         if (currentService === 'supavisor' && line.trim() === 'PORT: 4000') {
-          // Add DB_HOST before PORT: 4000 (with correct 2-space indent for environment variables)
-          updatedLines.push(`  DB_HOST: ${slug}-db`)
+          // Add DB_HOST before PORT: 4000 (with correct 6-space indent for environment variables)
+          updatedLines.push(`      DB_HOST: ${slug}-db`)
           updatedLines.push(line)
           continue
-        }
-
-        // 4. Mount init script in DB service
-        if (currentService === 'db') {
-          if (line.trim() === 'volumes:') {
-            inVolumes = true
-          } else if (inVolumes && (line.match(/^ [a-z_]+:/) || (line.trim() === '' && i + 1 < lines.length && !lines[i + 1].trim().startsWith('-')))) {
-            // We reached the end of volumes section (next key or empty line)
-            updatedLines.push(' - ./init-db.sql:/docker-entrypoint-initdb.d/migrations/999-supaconsole-init.sql:ro')
-            inVolumes = false
-          }
         }
 
       // 4. Mount init script in DB service
