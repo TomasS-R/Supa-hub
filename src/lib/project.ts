@@ -575,8 +575,8 @@ export async function createProject(name: string, userId: string, description?: 
 
         // 3c. Add DB_HOST env var to pooler service (supavisor) - skip PORT line, add DB_HOST before it
         if (currentService === 'supavisor' && line.trim() === 'PORT: 4000') {
-          // Add DB_HOST before PORT: 4000
-          updatedLines.push(`        DB_HOST: ${slug}-db`)
+          // Add DB_HOST before PORT: 4000 (with correct 2-space indent for environment variables)
+          updatedLines.push(`  DB_HOST: ${slug}-db`)
           updatedLines.push(line)
           continue
         }
@@ -1240,7 +1240,7 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
 
       // Add DB_HOST before PORT: 4000 in supavisor service
       if (currentComposeService === 'supavisor' && composeLine.trim() === 'PORT: 4000') {
-        updatedComposeLines.push(`        DB_HOST: ${project.slug}-db`)
+        updatedComposeLines.push(`  DB_HOST: ${project.slug}-db`)
         updatedComposeLines.push(composeLine)
         continue
       }
