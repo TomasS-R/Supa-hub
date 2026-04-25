@@ -99,7 +99,7 @@ export async function getUsedPortsFromDatabase(): Promise<Set<number>> {
                         'KONG_HTTPS_PORT',
                         'STUDIO_PORT',
                         'ANALYTICS_PORT',
-                        'POSTGRES_PORT',
+                        'POSTGRES_HOST_PORT',
                         'POOLER_PROXY_PORT_TRANSACTION',
                     ],
                 },

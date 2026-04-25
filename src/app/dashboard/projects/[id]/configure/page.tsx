@@ -30,7 +30,7 @@ export default function ConfigureProjectPage() {
     // Database
     POSTGRES_HOST: 'db',
     POSTGRES_DB: 'postgres',
-    POSTGRES_PORT: '5432',
+    POSTGRES_HOST_PORT: '54320',
 
     // Supavisor
     POOLER_PROXY_PORT_TRANSACTION: '6543',
@@ -592,8 +592,8 @@ export default function ConfigureProjectPage() {
                     <Input
                       id="postgres_port"
                       type="text"
-                      value={envVars.POSTGRES_PORT}
-                      onChange={createInputHandler('POSTGRES_PORT')}
+                      value={envVars.POSTGRES_HOST_PORT}
+                      onChange={createInputHandler('POSTGRES_HOST_PORT')}
                     />
                   </div>
                 </div>
@@ -664,13 +664,13 @@ export default function ConfigureProjectPage() {
                       <Input
                         type="text"
                         readOnly
-                        value={`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@127.0.0.1:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB}`}
+                        value={`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@${typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'}:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB}?pgbouncer=true&connection_limit=20`}
                         className="font-mono text-sm"
                       />
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={() => handleCopy(`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@127.0.0.1:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB}`, 'Database URL')}
+                        onClick={() => handleCopy(`postgresql://postgres.${envVars.POOLER_TENANT_ID}:${envVars.POSTGRES_PASSWORD}@${typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'}:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB}?pgbouncer=true&connection_limit=20`, 'Database URL')}
                       >
                         <Copy className="w-4 h-4" />
                       </Button>

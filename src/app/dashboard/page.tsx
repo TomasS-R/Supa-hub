@@ -45,7 +45,7 @@ export default function DashboardPage() {
   const [restoreSuccess, setRestoreSuccess] = useState<{ message: string; newPorts?: any } | null>(null)
   const [showCustomPorts, setShowCustomPorts] = useState(false)
   const [customPorts, setCustomPorts] = useState({
-    POSTGRES_PORT: '',
+    POSTGRES_HOST_PORT: '',
     POOLER_PROXY_PORT_TRANSACTION: ''
   })
   const [inlineActionLoading, setInlineActionLoading] = useState<string | null>(null)
@@ -53,6 +53,7 @@ export default function DashboardPage() {
   const [projectUrlsMap, setProjectUrlsMap] = useState<Record<string, Record<string, string>>>({})
   const [openLinksDropdown, setOpenLinksDropdown] = useState<string | null>(null)
   const [openStatusTooltip, setOpenStatusTooltip] = useState<string | null>(null)
+  const [statusLegendOpen, setStatusLegendOpen] = useState(false)
   const statusTooltipRef = useRef<HTMLDivElement>(null)
   const linksDropdownRef = useRef<HTMLDivElement>(null)
   const pollingRef = useRef<Set<string>>(new Set())
@@ -81,8 +82,8 @@ export default function DashboardPage() {
       if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
         urls['Analytics'] = `http://${serverHost}:${envVars.ANALYTICS_PORT}`
       }
-      if (envVars.POSTGRES_PORT) {
-        urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
+      if (envVars.POSTGRES_HOST_PORT) {
+        urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_HOST_PORT}/postgres`
       }
       return urls
     } catch {
@@ -279,7 +280,7 @@ export default function DashboardPage() {
       if (showCustomPorts) {
         // Validate custom ports
         const ports = {
-          POSTGRES_PORT: parseInt(customPorts.POSTGRES_PORT),
+          POSTGRES_HOST_PORT: parseInt(customPorts.POSTGRES_HOST_PORT),
           POOLER_PROXY_PORT_TRANSACTION: parseInt(customPorts.POOLER_PROXY_PORT_TRANSACTION)
         }
         
@@ -490,7 +491,7 @@ export default function DashboardPage() {
     setRestoreWithNewPorts(false)
     setShowCustomPorts(false)
     setCustomPorts({
-      POSTGRES_PORT: '',
+      POSTGRES_HOST_PORT: '',
       POOLER_PROXY_PORT_TRANSACTION: ''
     })
   }
@@ -536,8 +537,8 @@ export default function DashboardPage() {
             if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
               urls['Analytics'] = `http://${serverHost}:${envVars.ANALYTICS_PORT}`
             }
-            if (envVars.POSTGRES_PORT) {
-              urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_PORT}/postgres`
+            if (envVars.POSTGRES_HOST_PORT) {
+              urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_HOST_PORT}/postgres`
             }
 
             setProjectUrls(urls)
@@ -670,8 +671,8 @@ export default function DashboardPage() {
                 </CardContent>
               </Card>
             ) : (
-              <div className="flex gap-6">
-                <div className="flex-1 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              <div className="relative">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {projects.map((project) => {
                   const isRunning = project.status === 'active' || project.status === 'partially_running'
                   const isPaused = project.status === 'paused' || project.status === 'not_found'
@@ -863,37 +864,46 @@ export default function DashboardPage() {
                   )
                 })}
                 </div>
-                <div className="w-56 flex-shrink-0">
-                  <div className="bg-muted/30 rounded-lg p-3">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2.5">Status Legend</p>
-                    <div className="space-y-1">
-                      {statusLegendItems.map((item) => (
-                        <div key={item.status} className="relative">
-                          <button
-                            onClick={() => setOpenStatusTooltip(openStatusTooltip === item.status ? null : item.status)}
-                            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 transition-colors text-left"
-                          >
-                            <span className={`w-2 h-2 rounded-full ${item.color} flex-shrink-0`}></span>
-                            <span className="text-xs">{item.label}</span>
-                          </button>
-                          {openStatusTooltip === item.status && (
-                            <div ref={statusTooltipRef} className="absolute left-0 top-full mt-1 z-50 w-64 bg-background border rounded-lg shadow-xl animate-in fade-in zoom-in-95 duration-100">
-                              <div className="p-3">
-                                <div className="flex items-center gap-1.5 mb-1.5">
-                                  <span className={`w-2 h-2 rounded-full ${item.color}`}></span>
-                                  <span className="text-xs font-medium">{item.label}</span>
-                                </div>
-                                <p className="text-xs text-muted-foreground leading-relaxed">{item.desc}</p>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
               </div>
             )}
+
+            <div className="fixed right-32 top-32 z-40 w-56">
+              <div className="bg-muted/30 rounded-lg p-3">
+                <button
+                  onClick={() => setStatusLegendOpen(!statusLegendOpen)}
+                  className="w-full flex items-center justify-between text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2.5 hover:text-foreground transition-colors"
+                >
+                  <span>Status Legend</span>
+                  <svg className={`w-4 h-4 transition-transform duration-200 ${statusLegendOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                <div className={`space-y-1 overflow-hidden transition-all duration-200 ${statusLegendOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'}`}>
+                  {statusLegendItems.map((item) => (
+                    <div key={item.status} className="relative">
+                      <button
+                        onClick={() => setOpenStatusTooltip(openStatusTooltip === item.status ? null : item.status)}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted/60 transition-colors text-left"
+                      >
+                        <span className={`w-2 h-2 rounded-full ${item.color} flex-shrink-0`}></span>
+                        <span className="text-xs">{item.label}</span>
+                      </button>
+                      {openStatusTooltip === item.status && (
+                        <div ref={statusTooltipRef} className="absolute left-0 top-full mt-1 z-50 w-64 bg-background border rounded-lg shadow-xl animate-in fade-in zoom-in-95 duration-100">
+                          <div className="p-3">
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <span className={`w-2 h-2 rounded-full ${item.color}`}></span>
+                              <span className="text-xs font-medium">{item.label}</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground leading-relaxed">{item.desc}</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </main>
@@ -1300,8 +1310,8 @@ export default function DashboardPage() {
                             <input
                               type="number"
                               placeholder="e.g. 60000"
-                              value={customPorts.POSTGRES_PORT}
-                              onChange={(e) => setCustomPorts({...customPorts, POSTGRES_PORT: e.target.value})}
+                              value={customPorts.POSTGRES_HOST_PORT}
+                              onChange={(e) => setCustomPorts({...customPorts, POSTGRES_HOST_PORT: e.target.value})}
                               className="w-full mt-1 px-3 py-2 border rounded dark:bg-gray-800 dark:border-gray-700"
                             />
                           </div>
@@ -1348,7 +1358,7 @@ export default function DashboardPage() {
                       variant="default"
                       onClick={handleRestoreProject}
                       className="flex-1"
-                      disabled={restoring || (showCustomPorts && (!customPorts.POSTGRES_PORT || !customPorts.POOLER_PROXY_PORT_TRANSACTION))}
+                      disabled={restoring || (showCustomPorts && (!customPorts.POSTGRES_HOST_PORT || !customPorts.POOLER_PROXY_PORT_TRANSACTION))}
                     >
                       {restoring ? (
                         <div className="flex items-center gap-2">
@@ -1376,7 +1386,7 @@ export default function DashboardPage() {
                     <div className="bg-green-500/10 border border-green-500/20 rounded p-3">
                       <p className="text-sm font-medium text-green-600 dark:text-green-400 mb-2">Ports Changed:</p>
                       <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
-                        <li>PostgreSQL: <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">{restoreSuccess.newPorts.POSTGRES_PORT}</code></li>
+                        <li>PostgreSQL: <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">{restoreSuccess.newPorts.POSTGRES_HOST_PORT}</code></li>
                         <li>Pooler: <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">{restoreSuccess.newPorts.POOLER_PROXY_PORT_TRANSACTION}</code></li>
                       </ul>
                     </div>

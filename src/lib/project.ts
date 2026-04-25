@@ -383,7 +383,7 @@ export async function createProject(name: string, userId: string, description?: 
     const portRequests = [
       { name: 'KONG_HTTP_PORT', startPort: 8000 },
       { name: 'KONG_HTTPS_PORT', startPort: 8443 },
-      { name: 'POSTGRES_PORT', startPort: 54320 },
+      { name: 'POSTGRES_HOST_PORT', startPort: 54320 },
       { name: 'POOLER_PROXY_PORT_TRANSACTION', startPort: 54321 },
     ]
     if (!disabledModules.includes('studio')) {
@@ -427,7 +427,7 @@ export async function createProject(name: string, userId: string, description?: 
       PG_META_CRYPTO_KEY: generateRandomString(32),
 
       // Dynamically assigned available ports
-      POSTGRES_PORT: availablePorts.POSTGRES_PORT.toString(),
+      POSTGRES_HOST_PORT: availablePorts.POSTGRES_HOST_PORT.toString(),
       POOLER_PROXY_PORT_TRANSACTION: availablePorts.POOLER_PROXY_PORT_TRANSACTION.toString(),
       KONG_HTTP_PORT: availablePorts.KONG_HTTP_PORT.toString(),
       KONG_HTTPS_PORT: availablePorts.KONG_HTTPS_PORT.toString(),
@@ -562,6 +562,11 @@ export async function createProject(name: string, userId: string, description?: 
       // 3. Replace hardcoded analytics port with variable
       if (line.trim() === '- 4000:4000') {
         updatedLine = line.replace('- 4000:4000', `- \${ANALYTICS_PORT}:4000`)
+      }
+
+      // 3b. Replace pooler port mapping: ${POSTGRES_PORT}:5432 → ${POSTGRES_HOST_PORT}:5432
+      if (line.includes('POSTGRES_PORT}:5432')) {
+        updatedLine = line.replace('POSTGRES_PORT}:5432', 'POSTGRES_HOST_PORT}:5432')
       }
 
       // 4. Mount init script in DB service
@@ -1071,13 +1076,31 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       envVarsMap[ev.key] = ev.value
     })
 
+    // Step 2b: Migrate old POSTGRES_PORT → POSTGRES_HOST_PORT for existing projects
+    if (envVarsMap['POSTGRES_PORT'] && !envVarsMap['POSTGRES_HOST_PORT']) {
+      console.log('Migrating POSTGRES_PORT → POSTGRES_HOST_PORT for existing project...')
+      envVarsMap['POSTGRES_HOST_PORT'] = envVarsMap['POSTGRES_PORT']
+      delete envVarsMap['POSTGRES_PORT']
+      await prisma.projectEnvVar.create({
+        data: {
+          projectId,
+          key: 'POSTGRES_HOST_PORT',
+          value: envVarsMap['POSTGRES_HOST_PORT'],
+        },
+      })
+      await prisma.projectEnvVar.delete({
+        where: { projectId_key: { projectId, key: 'POSTGRES_PORT' } },
+      })
+      console.log('Migration complete')
+    }
+
     // Step 3: Determine port configuration
     let portsChanged = false
     if (customPorts) {
       // Only update PostgreSQL and Pooler ports, keep others from database
       console.log('Using custom ports:', customPorts)
       
-      envVarsMap['POSTGRES_PORT'] = customPorts.POSTGRES_PORT.toString()
+      envVarsMap['POSTGRES_HOST_PORT'] = customPorts.POSTGRES_HOST_PORT.toString()
       envVarsMap['POOLER_PROXY_PORT_TRANSACTION'] = customPorts.POOLER_PROXY_PORT_TRANSACTION.toString()
       portsChanged = true
     } else if (forceNewPorts) {
@@ -1090,7 +1113,7 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
         { name: 'KONG_HTTPS_PORT', startPort: 20001 },
         { name: 'STUDIO_PORT', startPort: 20002 },
         { name: 'ANALYTICS_PORT', startPort: 20003 },
-        { name: 'POSTGRES_PORT', startPort: 60000 },
+        { name: 'POSTGRES_HOST_PORT', startPort: 60000 },
         { name: 'POOLER_PROXY_PORT_TRANSACTION', startPort: 60001 },
       ], reservedPorts)
 
@@ -1098,7 +1121,7 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       envVarsMap['KONG_HTTPS_PORT'] = availablePorts.KONG_HTTPS_PORT.toString()
       envVarsMap['STUDIO_PORT'] = availablePorts.STUDIO_PORT.toString()
       envVarsMap['ANALYTICS_PORT'] = availablePorts.ANALYTICS_PORT.toString()
-      envVarsMap['POSTGRES_PORT'] = availablePorts.POSTGRES_PORT.toString()
+      envVarsMap['POSTGRES_HOST_PORT'] = availablePorts.POSTGRES_HOST_PORT.toString()
       envVarsMap['POOLER_PROXY_PORT_TRANSACTION'] = availablePorts.POOLER_PROXY_PORT_TRANSACTION.toString()
       envVarsMap['SUPABASE_PUBLIC_URL'] = `http://localhost:${availablePorts.KONG_HTTP_PORT}`
       envVarsMap['API_EXTERNAL_URL'] = `http://localhost:${availablePorts.KONG_HTTP_PORT}`
@@ -1181,8 +1204,19 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
     }
     
     // Add pgbouncer=true to DATABASE_URL for Prisma compatibility with pooler
-    if (envVarsMap.DATABASE_URL && !envVarsMap.DATABASE_URL.includes('pgbouncer')) {
-      envVarsMap.DATABASE_URL = envVarsMap.DATABASE_URL + '&pgbouncer=true'
+    if (envVarsMap.DATABASE_URL) {
+      if (envVarsMap.DATABASE_URL.includes('?pgbouncer')) {
+        // Already has pgbouncer parameter, ensure connection_limit is set
+        if (!envVarsMap.DATABASE_URL.includes('connection_limit')) {
+          envVarsMap.DATABASE_URL = envVarsMap.DATABASE_URL + '&connection_limit=20'
+        }
+      } else if (envVarsMap.DATABASE_URL.includes('?')) {
+        // Has other query params, append with &
+        envVarsMap.DATABASE_URL = envVarsMap.DATABASE_URL + '&pgbouncer=true&connection_limit=20'
+      } else {
+        // No query params, add with ?
+        envVarsMap.DATABASE_URL = envVarsMap.DATABASE_URL + '?pgbouncer=true&connection_limit=20'
+      }
     }
     
     const envContent = Object.entries(envVarsMap)
@@ -1392,7 +1426,7 @@ end
     const result: any = { success: true, project }
     if (portsChanged) {
       result.newPorts = {
-        POSTGRES_PORT: envVarsMap['POSTGRES_PORT'],
+        POSTGRES_HOST_PORT: envVarsMap['POSTGRES_HOST_PORT'],
         POOLER_PROXY_PORT_TRANSACTION: envVarsMap['POOLER_PROXY_PORT_TRANSACTION']
       }
     }
