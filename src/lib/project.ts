@@ -324,14 +324,16 @@ export async function createProject(name: string, userId: string, description?: 
     await execAsync(copyCommand)
 
     // Fix line endings in pooler.exs file (convert CRLF to LF for Elixir compatibility)
+    // Also replace hardcoded "db" host with System.get_env("DB_HOST") for Dokploy compatibility
     const poolerExsPath = path.join(projectDir, 'docker', 'volumes', 'pooler', 'pooler.exs')
     try {
-      const poolerContent = await fs.readFile(poolerExsPath, 'utf8')
-      const fixedContent = poolerContent.replace(/\r\n/g, '\n')
-      await fs.writeFile(poolerExsPath, fixedContent, 'utf8')
-      console.log('Fixed line endings in pooler.exs')
+      let poolerContent = await fs.readFile(poolerExsPath, 'utf8')
+      poolerContent = poolerContent.replace(/\r\n/g, '\n')
+      poolerContent = poolerContent.replace('"db_host" => "db"', '"db_host" => System.get_env("DB_HOST")')
+      await fs.writeFile(poolerExsPath, poolerContent, 'utf8')
+      console.log('Fixed line endings and db_host in pooler.exs')
     } catch (poolerError) {
-      console.warn('Could not fix pooler.exs line endings:', poolerError)
+      console.warn('Could not fix pooler.exs:', poolerError)
     }
 
     // Fix line endings in kong-entrypoint.sh (convert CRLF to LF for bash/sh compatibility)
@@ -448,10 +450,11 @@ export async function createProject(name: string, userId: string, description?: 
         IMGPROXY_AUTO_WEBP: 'true',
       } : {}),
 
-      // Database
-      POSTGRES_HOST: 'db',
-      POSTGRES_DB: 'postgres',
-      POSTGRES_USER: 'supabase_admin',
+    // Database
+    POSTGRES_HOST: 'db',
+    POSTGRES_DB: 'postgres',
+    POSTGRES_USER: 'supabase_admin',
+    DB_HOST: `${slug}-db`,
 
       // Other defaults
       POOLER_DEFAULT_POOL_SIZE: '20',
@@ -1103,6 +1106,18 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       console.log('Migration complete')
     }
 
+    // Step 2c: Add DB_HOST for pooler compatibility with Dokploy container naming
+    if (!envVarsMap['DB_HOST']) {
+      envVarsMap['DB_HOST'] = `${project.slug}-db`
+      await prisma.projectEnvVar.create({
+        data: {
+          projectId,
+          key: 'DB_HOST',
+          value: envVarsMap['DB_HOST'],
+        },
+      })
+    }
+
     // Step 3: Determine port configuration
     let portsChanged = false
     if (customPorts) {
@@ -1335,11 +1350,11 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
     _ -> nil
   end
 
-params = %{
-  "external_id" => System.get_env("POOLER_TENANT_ID"),
-  "db_host" => "db",
-  "db_port" => String.to_integer(System.get_env("POSTGRES_PORT")),
-  "db_database" => System.get_env("POSTGRES_DB"),
+    params = %{
+      "external_id" => System.get_env("POOLER_TENANT_ID"),
+      "db_host" => System.get_env("DB_HOST"),
+      "db_port" => String.to_integer(System.get_env("POSTGRES_PORT")),
+      "db_database" => System.get_env("POSTGRES_DB"),
   "require_user" => false,
   "auth_query" => "SELECT * FROM pgbouncer.get_auth($1)",
   "default_max_clients" => System.get_env("POOLER_MAX_CLIENT_CONN"),
