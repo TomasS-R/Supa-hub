@@ -574,9 +574,10 @@ export async function createProject(name: string, userId: string, description?: 
         updatedLine = line.replace('- 4000:4000', `- \${ANALYTICS_PORT}:4000`)
       }
 
-      // 3b. Replace pooler port mapping: ${POSTGRES_PORT}:5432 → ${POSTGRES_HOST_PORT}:5432
-      if (line.includes('POSTGRES_PORT}:5432')) {
-        updatedLine = line.replace('POSTGRES_PORT}:5432', 'POSTGRES_HOST_PORT}:5432')
+      // 3b. Remove supavisor's pass-through proxy port (${POSTGRES_PORT}:5432)
+      // Direct db access is now handled by the db service's own port binding
+      if (currentService === 'supavisor' && line.includes('POSTGRES_PORT}:5432')) {
+        continue // Skip this line — no longer needed
       }
 
       // 3c. Add DB_HOST env var to pooler service (supavisor) - skip PORT line, add DB_HOST before it
@@ -1233,12 +1234,8 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       `- \${ANALYTICS_PORT}:4000`
     )
 
-    // Replace pooler port mapping: ${POSTGRES_PORT}:5432 → ${POSTGRES_HOST_PORT}:5432
-    // This ensures the supavisor binds to the dynamically assigned host port, not the internal 5432
-    dockerComposeContent = dockerComposeContent.replace(
-      /\$\{POSTGRES_PORT\}:5432/g,
-      '${POSTGRES_HOST_PORT}:5432'
-    )
+    // Note: supavisor's pass-through proxy port (${POSTGRES_PORT}:5432) is removed
+    // line-by-line in the loop below. Direct db access uses the db service's own port binding.
 
     // Apply healthcheck safety patches for VPS stability
     dockerComposeContent = dockerComposeContent.replace(/retries: 10/g, 'retries: 120')
@@ -1273,6 +1270,11 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       }
       if (inRestoreDbService && composeLine.trim().startsWith('healthcheck:')) {
         restoreDbHealthcheckIdx = updatedComposeLines.length
+      }
+
+      // Remove supavisor's pass-through proxy port — direct db access uses the db service now
+      if (currentComposeService === 'supavisor' && composeLine.includes('POSTGRES_PORT}:5432')) {
+        continue // Skip this line
       }
 
       // Add DB_HOST before PORT: 4000 in supavisor service (correct 6-space indent)
