@@ -30,6 +30,7 @@ export default function ConfigureProjectPage() {
     // Database
     POSTGRES_HOST: 'db',
     POSTGRES_DB: 'postgres',
+    POSTGRES_PORT: '5432',
     POSTGRES_HOST_PORT: '54320',
 
     // Supavisor
@@ -659,6 +660,28 @@ export default function ConfigureProjectPage() {
                   </div>
 
                   <div className="space-y-2">
+                    <Label>Database URL (Direct)</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        readOnly
+                        value={`postgresql://postgres:${envVars.POSTGRES_PASSWORD}@${typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'}:${envVars.POSTGRES_HOST_PORT || envVars.POSTGRES_PORT}/${envVars.POSTGRES_DB}`}
+                        className="font-mono text-sm"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => handleCopy(`postgresql://postgres:${envVars.POSTGRES_PASSWORD}@${typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'}:${envVars.POSTGRES_HOST_PORT || envVars.POSTGRES_PORT}/${envVars.POSTGRES_DB}`, 'Database URL (Direct)')}
+                      >
+                        <Copy className="w-4 h-4" />
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Direct PostgreSQL connection — use this for external apps, ORMs, and database tools
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
                     <Label>Database URL (via Pooler)</Label>
                     <div className="flex gap-2">
                       <Input
@@ -676,7 +699,7 @@ export default function ConfigureProjectPage() {
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Connection string for external applications using the pooler
+                      Connection via Supavisor pooler — recommended for high-concurrency apps
                     </p>
                   </div>
 

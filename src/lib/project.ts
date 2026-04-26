@@ -525,15 +525,21 @@ export async function createProject(name: string, userId: string, description?: 
     const updatedLines: string[] = []
     let currentService: string | null = null
     let inVolumes = false
+    let dbHealthcheckIdx = -1
+    let dbHasPortsSection = false
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
 
       // Match service definition (e.g., "  db:")
-      const serviceMatch = line.match(/^  ([a-z_]+):/)
+      const serviceMatch = line.match(/^  ([a-z_-]+):/)
       if (serviceMatch) {
         currentService = serviceMatch[1]
         inVolumes = false
+        if (currentService === 'db') {
+          dbHasPortsSection = false
+          dbHealthcheckIdx = -1
+        }
       }
 
       let updatedLine = line
@@ -563,23 +569,33 @@ export async function createProject(name: string, userId: string, description?: 
         updatedLine = `name: ${slug}`
       }
 
-      // 3. Replace hardcoded analytics port with variable
+      // 3a. Replace hardcoded analytics port with variable
       if (line.trim() === '- 4000:4000') {
         updatedLine = line.replace('- 4000:4000', `- \${ANALYTICS_PORT}:4000`)
       }
 
-        // 3b. Replace pooler port mapping: ${POSTGRES_PORT}:5432 → ${POSTGRES_HOST_PORT}:5432
-        if (line.includes('POSTGRES_PORT}:5432')) {
-          updatedLine = line.replace('POSTGRES_PORT}:5432', 'POSTGRES_HOST_PORT}:5432')
-        }
+      // 3b. Replace pooler port mapping: ${POSTGRES_PORT}:5432 → ${POSTGRES_HOST_PORT}:5432
+      if (line.includes('POSTGRES_PORT}:5432')) {
+        updatedLine = line.replace('POSTGRES_PORT}:5432', 'POSTGRES_HOST_PORT}:5432')
+      }
 
-        // 3c. Add DB_HOST env var to pooler service (supavisor) - skip PORT line, add DB_HOST before it
-        if (currentService === 'supavisor' && line.trim() === 'PORT: 4000') {
-          // Add DB_HOST before PORT: 4000 (with correct 6-space indent for environment variables)
-          updatedLines.push(`      DB_HOST: ${slug}-db`)
-          updatedLines.push(line)
-          continue
+      // 3c. Add DB_HOST env var to pooler service (supavisor) - skip PORT line, add DB_HOST before it
+      if (currentService === 'supavisor' && line.trim() === 'PORT: 4000') {
+        // Add DB_HOST before PORT: 4000 (with correct 6-space indent for environment variables)
+        updatedLines.push(`      DB_HOST: ${slug}-db`)
+        updatedLines.push(line)
+        continue
+      }
+
+      // Track db service ports and healthcheck for direct port injection
+      if (currentService === 'db') {
+        if (line.trim() === 'ports:') {
+          dbHasPortsSection = true
         }
+        if (line.trim().startsWith('healthcheck:')) {
+          dbHealthcheckIdx = updatedLines.length
+        }
+      }
 
       // 4. Mount init script in DB service
       if (currentService === 'db') {
@@ -593,6 +609,16 @@ export async function createProject(name: string, userId: string, description?: 
       }
 
       updatedLines.push(updatedLine)
+    }
+
+    // 5. Add direct port exposure to db service if it doesn't have one
+    // This allows external clients to connect directly to PostgreSQL
+    if (!dbHasPortsSection && dbHealthcheckIdx >= 0) {
+      updatedLines.splice(dbHealthcheckIdx, 0,
+        '    ports:',
+        '      - ${POSTGRES_HOST_PORT}:5432'
+      )
+      console.log('Added direct PostgreSQL port exposure to db service')
     }
 
     // Add dokploy-network to networks section if not present
@@ -1094,24 +1120,23 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       envVarsMap['POSTGRES_HOST_PORT'] = envVarsMap['POSTGRES_PORT']
       // POSTGRES_PORT should always be 5432 for internal container communication
       envVarsMap['POSTGRES_PORT'] = '5432'
-      await prisma.projectEnvVar.delete({
+      await prisma.projectEnvVar.upsert({
+        where: { projectId_key: { projectId, key: 'POSTGRES_HOST_PORT' } },
+        update: { value: envVarsMap['POSTGRES_HOST_PORT'] },
+        create: { projectId, key: 'POSTGRES_HOST_PORT', value: envVarsMap['POSTGRES_HOST_PORT'] },
+      })
+      await prisma.projectEnvVar.upsert({
         where: { projectId_key: { projectId, key: 'POSTGRES_PORT' } },
-      })
-      await prisma.projectEnvVar.create({
-        data: {
-          projectId,
-          key: 'POSTGRES_HOST_PORT',
-          value: envVarsMap['POSTGRES_HOST_PORT'],
-        },
-      })
-      await prisma.projectEnvVar.create({
-        data: {
-          projectId,
-          key: 'POSTGRES_PORT',
-          value: '5432',
-        },
+        update: { value: '5432' },
+        create: { projectId, key: 'POSTGRES_PORT', value: '5432' },
       })
       console.log('Migration complete')
+    }
+
+    // Step 2b2: Ensure POSTGRES_PORT is always 5432 for internal container communication
+    if (envVarsMap['POSTGRES_PORT'] && envVarsMap['POSTGRES_PORT'] !== '5432' && envVarsMap['POSTGRES_HOST_PORT']) {
+      console.log(`Fixing POSTGRES_PORT from ${envVarsMap['POSTGRES_PORT']} to 5432 (internal)`)
+      envVarsMap['POSTGRES_PORT'] = '5432'
     }
 
     // Step 2c: Add DB_HOST for pooler compatibility with Dokploy container naming
@@ -1208,33 +1233,65 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
       `- \${ANALYTICS_PORT}:4000`
     )
 
+    // Replace pooler port mapping: ${POSTGRES_PORT}:5432 → ${POSTGRES_HOST_PORT}:5432
+    // This ensures the supavisor binds to the dynamically assigned host port, not the internal 5432
+    dockerComposeContent = dockerComposeContent.replace(
+      /\$\{POSTGRES_PORT\}:5432/g,
+      '${POSTGRES_HOST_PORT}:5432'
+    )
+
     // Apply healthcheck safety patches for VPS stability
     dockerComposeContent = dockerComposeContent.replace(/retries: 10/g, 'retries: 120')
     dockerComposeContent = dockerComposeContent.replace(/retries: 3/g, 'retries: 60')
     dockerComposeContent = dockerComposeContent.replace(/"localhost"/g, '"127.0.0.1"')
 
-    // Add DB_HOST env var to pooler service (supavisor) - line by line processing
+    // Add DB_HOST env var to pooler service (supavisor) and add direct db port exposure
     const composeLines = dockerComposeContent.split('\n')
     const updatedComposeLines: string[] = []
     let currentComposeService: string | null = null
+    let restoreDbHasPorts = false
+    let restoreDbHealthcheckIdx = -1
+    let inRestoreDbService = false
 
     for (let i = 0; i < composeLines.length; i++) {
       const composeLine = composeLines[i]
 
-      // Match service definition (e.g., "  supavisor:")
-      const composeServiceMatch = composeLine.match(/^  ([a-z_]+):/)
+      // Match service definition (e.g., "  supavisor:", "  db:")
+      const composeServiceMatch = composeLine.match(/^  ([a-z_-]+):/)
       if (composeServiceMatch) {
         currentComposeService = composeServiceMatch[1]
+        inRestoreDbService = (currentComposeService === 'db')
+        if (inRestoreDbService) {
+          restoreDbHasPorts = false
+          restoreDbHealthcheckIdx = -1
+        }
       }
 
-      // Add DB_HOST before PORT: 4000 in supavisor service
+      // Track db service ports and healthcheck position
+      if (inRestoreDbService && composeLine.trim() === 'ports:') {
+        restoreDbHasPorts = true
+      }
+      if (inRestoreDbService && composeLine.trim().startsWith('healthcheck:')) {
+        restoreDbHealthcheckIdx = updatedComposeLines.length
+      }
+
+      // Add DB_HOST before PORT: 4000 in supavisor service (correct 6-space indent)
       if (currentComposeService === 'supavisor' && composeLine.trim() === 'PORT: 4000') {
-        updatedComposeLines.push(`  DB_HOST: ${project.slug}-db`)
+        updatedComposeLines.push(`      DB_HOST: ${project.slug}-db`)
         updatedComposeLines.push(composeLine)
         continue
       }
 
       updatedComposeLines.push(composeLine)
+    }
+
+    // Add direct port exposure to db service if it doesn't have one
+    if (!restoreDbHasPorts && restoreDbHealthcheckIdx >= 0) {
+      updatedComposeLines.splice(restoreDbHealthcheckIdx, 0,
+        '    ports:',
+        '      - ${POSTGRES_HOST_PORT}:5432'
+      )
+      console.log('Added direct PostgreSQL port exposure to db service')
     }
 
     await fs.writeFile(projectDockerComposePath, updatedComposeLines.join('\n'))

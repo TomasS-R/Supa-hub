@@ -82,8 +82,12 @@ export default function DashboardPage() {
       if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
         urls['Analytics'] = `http://${serverHost}:${envVars.ANALYTICS_PORT}`
       }
-      if (envVars.POSTGRES_HOST_PORT) {
-        urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_HOST_PORT}/postgres`
+      const dbPort = envVars.POSTGRES_HOST_PORT || (envVars.POSTGRES_PORT !== '5432' ? envVars.POSTGRES_PORT : '')
+      if (dbPort) {
+        urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${dbPort}/postgres`
+      }
+      if (envVars.POOLER_PROXY_PORT_TRANSACTION) {
+        urls['Database (Pooler)'] = `postgresql://postgres.${envVars.POOLER_TENANT_ID || 'default'}:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB || 'postgres'}?pgbouncer=true&connection_limit=20`
       }
       return urls
     } catch {
@@ -537,8 +541,12 @@ export default function DashboardPage() {
             if (envVars.ANALYTICS_PORT && !disabledVars.includes('analytics')) {
               urls['Analytics'] = `http://${serverHost}:${envVars.ANALYTICS_PORT}`
             }
-            if (envVars.POSTGRES_HOST_PORT) {
-              urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POSTGRES_HOST_PORT}/postgres`
+            const dbPort = envVars.POSTGRES_HOST_PORT || (envVars.POSTGRES_PORT !== '5432' ? envVars.POSTGRES_PORT : '')
+            if (dbPort) {
+              urls['Database'] = `postgresql://postgres:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${dbPort}/postgres`
+            }
+            if (envVars.POOLER_PROXY_PORT_TRANSACTION) {
+              urls['Database (Pooler)'] = `postgresql://postgres.${envVars.POOLER_TENANT_ID || 'default'}:${envVars.POSTGRES_PASSWORD || 'password'}@${serverHost}:${envVars.POOLER_PROXY_PORT_TRANSACTION}/${envVars.POSTGRES_DB || 'postgres'}?pgbouncer=true&connection_limit=20`
             }
 
             setProjectUrls(urls)
