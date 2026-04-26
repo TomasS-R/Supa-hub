@@ -1243,6 +1243,8 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
     dockerComposeContent = dockerComposeContent.replace(/"localhost"/g, '"127.0.0.1"')
 
     // Add DB_HOST env var to pooler service (supavisor) and add direct db port exposure
+    // Note: service names have already been renamed above (supavisor → {slug}-pooler)
+    const poolerServiceName = `${project.slug}-pooler`
     const composeLines = dockerComposeContent.split('\n')
     const updatedComposeLines: string[] = []
     let currentComposeService: string | null = null
@@ -1253,7 +1255,7 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
     for (let i = 0; i < composeLines.length; i++) {
       const composeLine = composeLines[i]
 
-      // Match service definition (e.g., "  supavisor:", "  db:")
+      // Match service definition (e.g., "  project-slug-pooler:", "  db:")
       const composeServiceMatch = composeLine.match(/^  ([a-z_-]+):/)
       if (composeServiceMatch) {
         currentComposeService = composeServiceMatch[1]
@@ -1272,13 +1274,15 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
         restoreDbHealthcheckIdx = updatedComposeLines.length
       }
 
+      const isPoolerService = currentComposeService === poolerServiceName || currentComposeService === 'supavisor'
+
       // Remove supavisor's pass-through proxy port — direct db access uses the db service now
-      if (currentComposeService === 'supavisor' && composeLine.includes('POSTGRES_PORT}:5432')) {
+      if (isPoolerService && composeLine.includes('POSTGRES_PORT}:5432')) {
         continue // Skip this line
       }
 
-      // Add DB_HOST before PORT: 4000 in supavisor service (correct 6-space indent)
-      if (currentComposeService === 'supavisor' && composeLine.trim() === 'PORT: 4000') {
+      // Add DB_HOST before PORT: 4000 in pooler service (correct 6-space indent)
+      if (isPoolerService && composeLine.trim() === 'PORT: 4000') {
         updatedComposeLines.push(`      DB_HOST: ${project.slug}-db`)
         updatedComposeLines.push(composeLine)
         continue
