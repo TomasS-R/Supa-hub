@@ -531,8 +531,8 @@ export async function createProject(name: string, userId: string, description?: 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]
 
-      // Match service definition (e.g., "  db:")
-      const serviceMatch = line.match(/^  ([a-z_-]+):/)
+      // Match service definition (e.g., "  db:", "  supavisor:")
+      const serviceMatch = line.match(/^  ([a-z0-9_.-]+):/)
       if (serviceMatch) {
         currentService = serviceMatch[1]
         inVolumes = false
@@ -1255,8 +1255,8 @@ export async function restoreProject(projectId: string, forceNewPorts: boolean =
     for (let i = 0; i < composeLines.length; i++) {
       const composeLine = composeLines[i]
 
-      // Match service definition (e.g., "  project-slug-pooler:", "  db:")
-      const composeServiceMatch = composeLine.match(/^  ([a-z_-]+):/)
+      // Match service definition (e.g., "  project-slug-1777231001-pooler:", "  db:")
+      const composeServiceMatch = composeLine.match(/^  ([a-z0-9_.-]+):/)
       if (composeServiceMatch) {
         currentComposeService = composeServiceMatch[1]
         inRestoreDbService = (currentComposeService === 'db')
